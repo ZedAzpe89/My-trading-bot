@@ -5,8 +5,8 @@ app = FastAPI()
 
 # Configuración de la API de Capital.com
 CAPITAL_API_URL = "https://api-capital.backend-capital.com/api/v1"
-API_KEY = "TU_API_KEY"
-ACCOUNT_ID = "TU_ACCOUNT_ID"
+API_KEY = "5s6AT3Ka4UQEt8TI"
+ACCOUNT_ID = "eddrd89@outlook.com"
 
 # Endpoint para recibir alertas de TradingView
 @app.post("/webhook")
