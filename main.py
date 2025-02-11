@@ -13,8 +13,8 @@ ACCOUNT_ID = "eddrd89@outlook.com"
 async def webhook(signal: dict):
     try:
         # Procesar la señal de TradingView
-        action = signal.get("BUY")  # "buy" o "sell"
-        symbol = signal.get("USDMXN")  # Símbolo del instrumento (ejemplo: "EURUSD")
+        action = signal.get("{{strategy.order.action}}")  # "buy" o "sell"
+        symbol = signal.get("{{ticker}}")  # Símbolo del instrumento (ejemplo: "EURUSD")
         quantity = signal.get("quantity", 1)  # Cantidad a operar (por defecto: 1)
 
         # Ejecutar la orden en Capital.com
