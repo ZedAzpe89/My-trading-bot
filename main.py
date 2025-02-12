@@ -58,12 +58,12 @@ def authenticate():
         auth_data = response.json()
         print(f"Datos de autenticación: {auth_data}")
         
-        # Verificar si 'currentAccountId' está presente
-        if "currentAccountId" not in auth_data:
-            raise Exception("El campo 'currentAccountId' no está presente en la respuesta de autenticación.")
+        # Verificar si 'token' está presente
+        if "token" not in auth_data:
+            raise Exception("El campo 'token' no está presente en la respuesta de autenticación.")
         
-        # Devuelve el 'currentAccountId' para usarlo en la orden
-        return auth_data["currentAccountId"]
+        # Devuelve el token de sesión
+        return auth_data["token"]
     except Exception as e:
         print(f"Error al procesar la respuesta de autenticación: {e}")
         raise Exception(f"Error al procesar la respuesta de autenticación: {response.text}")
