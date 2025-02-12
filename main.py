@@ -1,28 +1,33 @@
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 import requests
 
 app = FastAPI()
 
 # Configuración de la API de Capital.com
 CAPITAL_API_URL = "https://demo-api-capital.backend-capital.com/api/v1"
-API_KEY = "39iCQ2YJgYEvhUOr"  # Reemplaza con tu API Key
-CUSTOM_PASSWORD = "MetEddRo1604*"  # Reemplaza con tu contraseña personalizada
-ACCOUNT_ID = "eddrd89@outlook.com"  # Reemplaza con tu Account ID
+API_KEY = "39iCQ2YJgYEvhUOr"  # Reemplaza con tu API Key 
+CUSTOM_PASSWORD = "MetEddRo1604*"  # Reemplaza con tu contraseña personalizada 
+ACCOUNT_ID = "eddrd89@outlook.com"  # Reemplaza con tu Account ID 
+
+# Modelo para validar la entrada
+class Signal(BaseModel):
+    action: str
+    symbol: str
+    quantity: int = 1
 
 # Endpoint para recibir alertas de TradingView
 @app.post("/webhook")
-async def webhook(signal: dict):
+async def webhook(signal: Signal):
     try:
-        # Procesar la señal de TradingView
-        action = signal.get("action")  # "buy" o "sell"
-        symbol = signal.get("symbol")  # Símbolo del instrumento (ejemplo: "EURUSD")
-        quantity = signal.get("quantity", 1)  # Cantidad a operar (por defecto: 1)
+        # Autenticar y obtener el token
+        token = authenticate()
 
         # Ejecutar la orden en Capital.com
-        if action == "buy":
-            place_order("BUY", symbol, quantity)
-        elif action == "sell":
-            place_order("SELL", symbol, quantity)
+        if signal.action == "buy":
+            place_order(token, "BUY", signal.symbol, signal.quantity)
+        elif signal.action == "sell":
+            place_order(token, "SELL", signal.symbol, signal.quantity)
         else:
             raise HTTPException(status_code=400, detail="Acción no válida")
 
@@ -30,10 +35,29 @@ async def webhook(signal: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# Función para ejecutar una orden en Capital.com
-def place_order(direction: str, epic: str, size: int):
+# Función para autenticar en Capital.com
+def authenticate():
     headers = {
         "X-CAP-API-KEY": API_KEY,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "identifier": ACCOUNT_ID,
+        "password": CUSTOM_PASSWORD
+    }
+    response = requests.post(f"{CAPITAL_API_URL}/session", headers=headers, json=payload)
+    if response.status_code != 200:
+        raise Exception(f"Error de autenticación: {response.text}")
+    
+    # Obtener el token de la respuesta
+    auth_data = response.json()
+    return auth_data["token"]
+
+# Función para ejecutar una orden en Capital.com
+def place_order(token: str, direction: str, epic: str, size: int):
+    headers = {
+        "X-CAP-API-KEY": API_KEY,
+        "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
     }
     payload = {
