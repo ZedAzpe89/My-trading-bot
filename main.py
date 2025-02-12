@@ -51,39 +51,64 @@ def authenticate():
         "identifier": ACCOUNT_ID,
         "password": CUSTOM_PASSWORD
     }
+    
+    # Realizar la autenticación
     response = requests.post(f"{CAPITAL_API_URL}/session", headers=headers, json=payload)
+    
     if response.status_code != 200:
         raise Exception(f"Error de autenticación: {response.text}")
+
+    # Obtener CST y X-SECURITY-TOKEN desde los encabezados de la respuesta
+    cst = response.headers.get("CST")
+    security_token = response.headers.get("X-SECURITY-TOKEN")
     
-    try:
-        auth_data = response.json()
-        print(f"Datos de autenticación: {auth_data}")
-        
-        # Usar el currentAccountId como identificador
-        account_id = auth_data["currentAccountId"]
-        print(f"currentAccountId obtenido: {account_id}")
-        
-        # Si se obtiene el account_id, lo utilizamos para la ejecución de la orden
-        return account_id
-    except Exception as e:
-        print(f"Error al procesar la respuesta de autenticación: {e}")
-        raise Exception(f"Error al procesar la respuesta de autenticación: {response.text}")
+    if not cst or not security_token:
+        raise Exception("No se obtuvo CST o X-SECURITY-TOKEN. Verifica los encabezados de la respuesta.")
+    
+    print(f"Autenticación exitosa: CST={cst}, X-SECURITY-TOKEN={security_token}")
+    
+    return cst, security_token  # Devuelvo ambos valores para usarlos en las solicitudes posteriores
 
 # Función para ejecutar una orden en Capital.com
-def place_order(account_id: str, direction: str, epic: str, size: int):
+def place_order(cst: str, security_token: str, direction: str, epic: str, size: int):
     headers = {
         "X-CAP-API-KEY": API_KEY,
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "CST": cst,
+        "X-SECURITY-TOKEN": security_token
     }
+    
     payload = {
         "epic": epic,
         "direction": direction,
         "size": size,
         "type": "MARKET",  # Tipo de orden (MARKET, LIMIT, etc.)
-        "currencyCode": "USD",  # Moneda de la operación
-        "accountId": account_id  # Usamos el account_id obtenido
+        "currencyCode": "USD"  # Moneda de la operación
     }
+    
+    # Realizar la solicitud para ejecutar la orden
     response = requests.post(f"{CAPITAL_API_URL}/orders", headers=headers, json=payload)
+    
     if response.status_code != 200:
         raise Exception(f"Error al ejecutar la orden: {response.text}")
-    return response.json()
+    
+    return response.json()  # Devuelvo la respuesta de la orden para mayor detalle
+
+# Función que maneja el webhook y ejecuta las órdenes
+@app.post("/webhook")
+async def webhook(signal: Signal):
+    try:
+        # Autenticar y obtener CST y X-SECURITY-TOKEN
+        cst, security_token = authenticate()
+
+        # Ejecutar la orden en Capital.com
+        if signal.action == "buy":
+            place_order(cst, security_token, "BUY", signal.symbol, signal.quantity)
+        elif signal.action == "sell":
+            place_order(cst, security_token, "SELL", signal.symbol, signal.quantity)
+        else:
+            raise HTTPException(status_code=400, detail="Acción no válida")
+
+        return {"message": "Orden ejecutada correctamente"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
