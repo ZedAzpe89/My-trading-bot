@@ -41,7 +41,6 @@ async def webhook(signal: Signal):
         raise HTTPException(status_code=500, detail=f"Error en webhook: {str(e)}")
 
 # Función para autenticar en Capital.com
-# Función para autenticar en Capital.com
 def authenticate():
     headers = {
         "X-CAP-API-KEY": API_KEY,
@@ -81,7 +80,7 @@ def place_order(cst: str, security_token: str, direction: str, epic: str, size: 
     payload = {
         "epic": epic,
         "direction": direction,
-        "size": size,
+        "size": size,  # Se debe pasar el tamaño de la orden aquí
         "type": "MARKET",  # Tipo de orden (MARKET, LIMIT, etc.)
         "currencyCode": "USD"  # Moneda de la operación
     }
@@ -103,9 +102,9 @@ async def webhook(signal: Signal):
 
         # Ejecutar la orden en Capital.com
         if signal.action == "buy":
-            place_order(cst, security_token, "BUY", signal.symbol, signal.quantity)
+            place_order(cst, security_token, "BUY", signal.symbol, signal.quantity)  # El tamaño se pasa aquí
         elif signal.action == "sell":
-            place_order(cst, security_token, "SELL", signal.symbol, signal.quantity)
+            place_order(cst, security_token, "SELL", signal.symbol, signal.quantity)  # El tamaño se pasa aquí
         else:
             raise HTTPException(status_code=400, detail="Acción no válida")
 
