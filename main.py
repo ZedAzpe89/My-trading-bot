@@ -81,9 +81,9 @@ def authenticate():
     return cst, x_security_token
 
 # Función para ejecutar una orden en Capital.com (usando '/positions' en lugar de '/orders')
-def place_order(cst: str, x_security_token: str, direction: str, epic: str, size: int = 1):  # size por defecto 1
+def place_order(cst: str, x_security_token: str, direction: str, epic: str, size: int = 10):  # size por defecto 1
     # Validar que el tamaño de la orden sea válido
-    MIN_SIZE = 1  # Define un tamaño mínimo (ajústalo según sea necesario)
+    MIN_SIZE = 10  # Define un tamaño mínimo (ajústalo según sea necesario)
     
     if size < MIN_SIZE:
         raise Exception(f"El tamaño mínimo de la orden es {MIN_SIZE}. Estás intentando operar con un tamaño de {size}.")
