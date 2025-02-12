@@ -81,7 +81,7 @@ def authenticate():
     return cst, x_security_token
 
 # Función para ejecutar una orden en Capital.com (usando '/positions' en lugar de '/orders')
-def place_order(cst: str, x_security_token: str, direction: str, epic: str, size: int):
+def place_order(cst: str, x_security_token: str, direction: str, epic: str, size: int = 1):
     headers = {
         "X-CAP-API-KEY": API_KEY,
         "CST": cst,  # Se usa el CST para la autorización
