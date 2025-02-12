@@ -41,6 +41,7 @@ async def webhook(signal: Signal):
         raise HTTPException(status_code=500, detail=f"Error en webhook: {str(e)}")
 
 # Función para autenticar en Capital.com
+# Función para autenticar en Capital.com
 def authenticate():
     headers = {
         "X-CAP-API-KEY": API_KEY,
@@ -58,21 +59,20 @@ def authenticate():
         auth_data = response.json()
         print(f"Datos de autenticación: {auth_data}")
         
-        # Verificar si 'token' está presente
-        if "token" not in auth_data:
-            raise Exception("El campo 'token' no está presente en la respuesta de autenticación.")
+        # Usar el currentAccountId como identificador
+        account_id = auth_data["currentAccountId"]
+        print(f"currentAccountId obtenido: {account_id}")
         
-        # Devuelve el token de sesión
-        return auth_data["token"]
+        # Si se obtiene el account_id, lo utilizamos para la ejecución de la orden
+        return account_id
     except Exception as e:
         print(f"Error al procesar la respuesta de autenticación: {e}")
         raise Exception(f"Error al procesar la respuesta de autenticación: {response.text}")
 
 # Función para ejecutar una orden en Capital.com
-def place_order(token: str, direction: str, epic: str, size: int):
+def place_order(account_id: str, direction: str, epic: str, size: int):
     headers = {
         "X-CAP-API-KEY": API_KEY,
-        "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
     }
     payload = {
@@ -80,7 +80,8 @@ def place_order(token: str, direction: str, epic: str, size: int):
         "direction": direction,
         "size": size,
         "type": "MARKET",  # Tipo de orden (MARKET, LIMIT, etc.)
-        "currencyCode": "USD"  # Moneda de la operación
+        "currencyCode": "USD",  # Moneda de la operación
+        "accountId": account_id  # Usamos el account_id obtenido
     }
     response = requests.post(f"{CAPITAL_API_URL}/orders", headers=headers, json=payload)
     if response.status_code != 200:
