@@ -6,9 +6,9 @@ app = FastAPI()
 
 # Configuración de la API de Capital.com
 CAPITAL_API_URL = "https://demo-api-capital.backend-capital.com/api/v1"
-API_KEY = "39iCQ2YJgYEvhUOr"  # Reemplaza con tu API Key 
-CUSTOM_PASSWORD = "MetEddRo1604*"  # Reemplaza con tu contraseña personalizada 
-ACCOUNT_ID = "eddrd89@outlook.com"  # Reemplaza con tu Account ID 
+API_KEY = "39iCQ2YJgYEvhUOr"  # Reemplaza con tu API Key  
+CUSTOM_PASSWORD = "MetEddRo1604*"  # Reemplaza con tu contraseña personalizada  
+ACCOUNT_ID = "eddrd89@outlook.com"  # Reemplaza con tu Account ID  
 
 # Modelo para validar la entrada
 class Signal(BaseModel):
@@ -19,20 +19,20 @@ class Signal(BaseModel):
 # Endpoint para recibir alertas de TradingView
 @app.post("/webhook")
 async def webhook(signal: Signal):
-
-    # Procesar la señal de TradingView
-    action = signal.action
-    symbol = signal.symbol
-    quantity = signal.quantity
+    try:
+        # Procesar la señal de TradingView
+        action = signal.action
+        symbol = signal.symbol
+        quantity = signal.quantity
 
         # Autenticar y obtener el token
         token = authenticate()
 
         # Ejecutar la orden en Capital.com
-        if signal.action == "buy":
-            place_order(token, "BUY", signal.symbol, signal.quantity)
-        elif signal.action == "sell":
-            place_order(token, "SELL", signal.symbol, signal.quantity)
+        if action == "buy":
+            place_order(token, "BUY", symbol, quantity)
+        elif action == "sell":
+            place_order(token, "SELL", symbol, quantity)
         else:
             raise HTTPException(status_code=400, detail="Acción no válida")
 
