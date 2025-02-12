@@ -19,7 +19,6 @@ class Signal(BaseModel):
 # Endpoint para recibir alertas de TradingView
 @app.post("/webhook")
 async def webhook(signal: Signal):
-
     try:
         # Procesar la señal de TradingView
         action = signal.action
@@ -28,6 +27,8 @@ async def webhook(signal: Signal):
 
         # Autenticar y obtener el token
         token = authenticate()
+        if not token:  # Verifica si el token es None o vacío
+            raise HTTPException(status_code=400, detail="Token de autenticación no disponible")
 
         # Ejecutar la orden en Capital.com
         if action == "buy":
@@ -57,6 +58,11 @@ def authenticate():
     
     # Obtener el token de la respuesta
     auth_data = response.json()
+    
+    # Verifica si 'token' existe en la respuesta antes de retornarlo
+    if 'token' not in auth_data:
+        raise Exception("El token no está presente en la respuesta de autenticación.")
+    
     return auth_data["token"]
 
 # Función para ejecutar una orden en Capital.com
