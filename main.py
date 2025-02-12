@@ -81,23 +81,33 @@ def authenticate():
     return cst, x_security_token
 
 # Función para ejecutar una orden en Capital.com (usando '/positions' en lugar de '/orders')
-def place_order(cst: str, x_security_token: str, direction: str, epic: str, size: int = 1):
+def place_order(cst: str, x_security_token: str, direction: str, epic: str, size: int = 1):  # size por defecto 1
+    # Validar que el tamaño de la orden sea válido
+    MIN_SIZE = 1  # Define un tamaño mínimo (ajústalo según sea necesario)
+    
+    if size < MIN_SIZE:
+        raise Exception(f"El tamaño mínimo de la orden es {MIN_SIZE}. Estás intentando operar con un tamaño de {size}.")
+    
     headers = {
         "X-CAP-API-KEY": API_KEY,
         "CST": cst,  # Se usa el CST para la autorización
         "X-SECURITY-TOKEN": x_security_token,  # Se usa el X-SECURITY-TOKEN
         "Content-Type": "application/json"
     }
+    
     payload = {
         "epic": epic,
         "direction": direction,
-        "size": size,
+        "size": size,  # Tamaño de la orden
         "type": "MARKET",  # Tipo de orden (MARKET, LIMIT, etc.)
         "currencyCode": "USD"  # Moneda de la operación
     }
+
+    # Enviar la solicitud para abrir una posición
     response = requests.post(f"{CAPITAL_API_URL}/positions", headers=headers, json=payload)
     
-    # Revisa si la solicitud fue exitosa
+    # Revisar si la solicitud fue exitosa
     if response.status_code != 200:
         raise Exception(f"Error al ejecutar la orden: {response.text}")
+    
     return response.json()
