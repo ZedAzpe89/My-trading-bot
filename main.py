@@ -80,7 +80,7 @@ def authenticate():
     
     return cst, x_security_token
 
-# Función para ejecutar una orden en Capital.com
+# Función para ejecutar una orden en Capital.com (usando '/positions' en lugar de '/orders')
 def place_order(cst: str, x_security_token: str, direction: str, epic: str, size: int):
     headers = {
         "X-CAP-API-KEY": API_KEY,
@@ -95,7 +95,9 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
         "type": "MARKET",  # Tipo de orden (MARKET, LIMIT, etc.)
         "currencyCode": "USD"  # Moneda de la operación
     }
-    response = requests.post(f"{CAPITAL_API_URL}/orders", headers=headers, json=payload)
+    response = requests.post(f"{CAPITAL_API_URL}/positions", headers=headers, json=payload)
+    
+    # Revisa si la solicitud fue exitosa
     if response.status_code != 200:
         raise Exception(f"Error al ejecutar la orden: {response.text}")
     return response.json()
