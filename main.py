@@ -25,14 +25,14 @@ async def webhook(signal: Signal):
         symbol = signal.symbol
         quantity = signal.quantity
 
-        # Autenticar y obtener el token
-        token = authenticate()
+        # Autenticar y obtener los tokens (CST y X-SECURITY-TOKEN)
+        cst, x_security_token = authenticate()
 
         # Ejecutar la orden en Capital.com
         if signal.action == "buy":
-            place_order(token, "BUY", signal.symbol, signal.quantity)
+            place_order(cst, x_security_token, "BUY", signal.symbol, signal.quantity)
         elif signal.action == "sell":
-            place_order(token, "SELL", signal.symbol, signal.quantity)
+            place_order(cst, x_security_token, "SELL", signal.symbol, signal.quantity)
         else:
             raise HTTPException(status_code=400, detail="Acción no válida")
 
@@ -58,7 +58,7 @@ def authenticate():
     if response.status_code != 200:
         raise Exception(f"Error de autenticación: {response.text}")
     
-    # Intentar imprimir el cuerpo de la respuesta como JSON para entender mejor
+    # Intentar procesar la respuesta como JSON para obtener el CST y X-SECURITY-TOKEN
     try:
         auth_data = response.json()
     except Exception as e:
@@ -66,17 +66,26 @@ def authenticate():
     
     print("Datos completos de autenticación:", auth_data)
     
-    # Comprobamos si el token está presente
-    if 'token' not in auth_data:
-        raise Exception("El token no está presente en la respuesta de autenticación.")
+    # Asegurarse de que CST y X-SECURITY-TOKEN estén presentes
+    if 'clientId' not in auth_data or 'currentAccountId' not in auth_data:
+        raise Exception("No se encontró la información necesaria para autenticarse.")
+
+    # Obtenemos el CST y X-SECURITY-TOKEN de los encabezados de la respuesta
+    cst = response.headers.get("CST")
+    x_security_token = response.headers.get("X-SECURITY-TOKEN")
     
-    return auth_data["token"]
+    # Verifica si ambos tokens están presentes
+    if not cst or not x_security_token:
+        raise Exception("No se encontraron los tokens necesarios (CST, X-SECURITY-TOKEN).")
+    
+    return cst, x_security_token
 
 # Función para ejecutar una orden en Capital.com
-def place_order(token: str, direction: str, epic: str, size: int):
+def place_order(cst: str, x_security_token: str, direction: str, epic: str, size: int):
     headers = {
         "X-CAP-API-KEY": API_KEY,
-        "Authorization": f"Bearer {token}",
+        "CST": cst,  # Se usa el CST para la autorización
+        "X-SECURITY-TOKEN": x_security_token,  # Se usa el X-SECURITY-TOKEN
         "Content-Type": "application/json"
     }
     payload = {
