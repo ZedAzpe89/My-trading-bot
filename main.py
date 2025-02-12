@@ -53,13 +53,20 @@ def authenticate():
         "password": CUSTOM_PASSWORD
     }
     response = requests.post(f"{CAPITAL_API_URL}/session", headers=headers, json=payload)
+    
+    # Imprimir la respuesta completa para depuración
+    print("Respuesta de autenticación:", response.text)
+    
     if response.status_code != 200:
         raise Exception(f"Error de autenticación: {response.text}")
     
     # Obtener el token de la respuesta
     auth_data = response.json()
     
-    # Verifica si 'token' existe en la respuesta antes de retornarlo
+    # Imprimir el JSON completo de la respuesta para entender mejor el formato
+    print("Datos de autenticación:", auth_data)
+    
+    # Verifica si 'token' está presente en la respuesta
     if 'token' not in auth_data:
         raise Exception("El token no está presente en la respuesta de autenticación.")
     
