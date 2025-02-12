@@ -19,7 +19,12 @@ class Signal(BaseModel):
 # Endpoint para recibir alertas de TradingView
 @app.post("/webhook")
 async def webhook(signal: Signal):
-    try:
+
+    # Procesar la señal de TradingView
+    action = signal.action
+    symbol = signal.symbol
+    quantity = signal.quantity
+
         # Autenticar y obtener el token
         token = authenticate()
 
