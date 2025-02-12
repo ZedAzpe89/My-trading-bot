@@ -29,16 +29,16 @@ async def webhook(signal: Signal):
         token = authenticate()
 
         # Ejecutar la orden en Capital.com
-        if action == "buy":
-            place_order(token, "BUY", symbol, quantity)
-        elif action == "sell":
-            place_order(token, "SELL", symbol, quantity)
+        if signal.action == "buy":
+            place_order(token, "BUY", signal.symbol, signal.quantity)
+        elif signal.action == "sell":
+            place_order(token, "SELL", signal.symbol, signal.quantity)
         else:
             raise HTTPException(status_code=400, detail="Acción no válida")
 
         return {"message": "Orden ejecutada correctamente"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Error en webhook: {str(e)}")
 
 # Función para autenticar en Capital.com
 def authenticate():
