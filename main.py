@@ -6,9 +6,9 @@ app = FastAPI()
 
 # Configuración de la API de Capital.com
 CAPITAL_API_URL = "https://demo-api-capital.backend-capital.com/api/v1"
-API_KEY = "sdfrg34YEvhUOr"  # Reemplaza con tu API Key  
-CUSTOM_PASSWORD = "Mewerw4fgg4"  # Reemplaza con tu contraseña personalizada  
-ACCOUNT_ID = "edw4439@outlook.com"  # Reemplaza con tu Account ID  
+API_KEY = "39iCQ2YJgYEvhUOr"  # Reemplaza con tu API Key  
+CUSTOM_PASSWORD = "MetEddRo1604*"  # Reemplaza con tu contraseña personalizada  
+ACCOUNT_ID = "eddrd89@outlook.com"  # Reemplaza con tu Account ID  
 
 # Modelo para validar la entrada
 class Signal(BaseModel):
