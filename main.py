@@ -4,17 +4,18 @@ import requests
 app = FastAPI()
 
 # Configuración de la API de Capital.com
-CAPITAL_API_URL = "https://api-capital.backend-capital.com/api/v1"
-API_KEY = "5s6AT3Ka4UQEt8TI"
-ACCOUNT_ID = "eddrd89@outlook.com"
+CAPITAL_API_URL = "https://demo-api-capital.backend-capital.com/api/v1"
+API_KEY = "39iCQ2YJgYEvhUOr"  # Reemplaza con tu API Key
+CUSTOM_PASSWORD = "MetEddRo1604*"  # Reemplaza con tu contraseña personalizada
+ACCOUNT_ID = "eddrd89@outlook.com"  # Reemplaza con tu Account ID
 
 # Endpoint para recibir alertas de TradingView
 @app.post("/webhook")
 async def webhook(signal: dict):
     try:
         # Procesar la señal de TradingView
-        action = signal.get("{{strategy.order.action}}")  # "buy" o "sell"
-        symbol = signal.get("{{ticker}}")  # Símbolo del instrumento (ejemplo: "EURUSD")
+        action = signal.get("action")  # "buy" o "sell"
+        symbol = signal.get("symbol")  # Símbolo del instrumento (ejemplo: "EURUSD")
         quantity = signal.get("quantity", 1)  # Cantidad a operar (por defecto: 1)
 
         # Ejecutar la orden en Capital.com
