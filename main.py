@@ -54,15 +54,17 @@ def authenticate():
     if response.status_code != 200:
         raise Exception(f"Error de autenticación: {response.text}")
     
-    # Imprimir la respuesta completa para ver qué contiene
-    print(f"Respuesta de autenticación: {response.text}")
-    
-    # Obtener el token de la respuesta
-    auth_data = response.json()
-    if "token" not in auth_data:
-        raise Exception("El campo 'token' no está presente en la respuesta de autenticación.")
+    try:
+        auth_data = response.json()
+        print(f"Datos de autenticación: {auth_data}")
+        if "token" not in auth_data:
+            raise Exception("El campo 'token' no está presente en la respuesta de autenticación.")
+    except Exception as e:
+        print(f"Error al procesar la respuesta de autenticación: {e}")
+        raise Exception(f"Error al procesar la respuesta de autenticación: {response.text}")
     
     return auth_data["token"]
+
 # Función para ejecutar una orden en Capital.com
 def place_order(token: str, direction: str, epic: str, size: int):
     headers = {
