@@ -57,13 +57,16 @@ def authenticate():
     try:
         auth_data = response.json()
         print(f"Datos de autenticación: {auth_data}")
-        if "token" not in auth_data:
-            raise Exception("El campo 'token' no está presente en la respuesta de autenticación.")
+        
+        # Verificar si 'currentAccountId' está presente
+        if "currentAccountId" not in auth_data:
+            raise Exception("El campo 'currentAccountId' no está presente en la respuesta de autenticación.")
+        
+        # Devuelve el 'currentAccountId' para usarlo en la orden
+        return auth_data["currentAccountId"]
     except Exception as e:
         print(f"Error al procesar la respuesta de autenticación: {e}")
         raise Exception(f"Error al procesar la respuesta de autenticación: {response.text}")
-    
-    return auth_data["token"]
 
 # Función para ejecutar una orden en Capital.com
 def place_order(token: str, direction: str, epic: str, size: int):
