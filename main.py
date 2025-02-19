@@ -56,7 +56,7 @@ async def webhook(request: Request):
         
         # Si la señal es de otro timeframe, verificar la tendencia de 4H
         if symbol in last_signal_4h and last_signal_4h[symbol] != action:
-            return {"message": f"Operación bloqueada, la última señal de 4H es {last_signal_4h[symbol]}"}
+            return {"message": f"Operación bloqueada, la última señal de 4H para {symbol} es: {last_signal_4h[symbol]}"}
         
         # Autenticar y obtener los tokens (CST y X-SECURITY-TOKEN)
         cst, x_security_token = authenticate()
