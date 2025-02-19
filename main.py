@@ -3,6 +3,10 @@ from pydantic import BaseModel
 import requests
 import json
 import os
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+from io import BytesIO
 
 app = FastAPI()
 
@@ -15,24 +19,59 @@ ACCOUNT_ID = "eddrd89@outlook.com"  # Reemplaza con tu Account ID
 # Máximo de 2 compras y 2 ventas por símbolo
 MAX_TRADES_PER_TYPE = 2
 
-# Archivo para almacenar la última señal de 4H
-SIGNAL_FILE = r"C:\Users\Eduar\OneDrive\Documents\GitHub\My-trading-bot\last_signal_4h.json"
+# Configuración de Google Drive
+SCOPES = ["https://www.googleapis.com/auth/drive"]
+GOOGLE_CREDENTIALS = os.getenv("GOOGLE_CREDENTIALS")  # Cargar credenciales desde la variable de entorno
+SERVICE_ACCOUNT_INFO = json.loads(GOOGLE_CREDENTIALS)  # Convertir la cadena JSON a un diccionario
+FOLDER_ID = "id-de-tu-carpeta"  # Reemplaza con el ID de la carpeta en Google Drive
+FILE_NAME = "last_signal_4h.json"  # Nombre del archivo en Google Drive
 
-# Verificar si el archivo existe y crearlo si no
-print("Ruta del archivo:", SIGNAL_FILE)
-if not os.path.exists(SIGNAL_FILE):
-    with open(SIGNAL_FILE, "w") as f:
-        json.dump({}, f)
-    print(f"Archivo creado en: {SIGNAL_FILE}")
-else:
-    print(f"El archivo ya existe en: {SIGNAL_FILE}")
+# Autenticación con Google Drive
+creds = service_account.Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=SCOPES)
+service = build("drive", "v3", credentials=creds)
 
-# Cargar el contenido del archivo
-with open(SIGNAL_FILE, "r") as f:
-    try:
-        last_signal_4h = json.load(f)
-    except json.JSONDecodeError:
-        last_signal_4h = {}
+# Subir un archivo a Google Drive
+def upload_file(file_path, file_name):
+    file_metadata = {
+        "name": file_name,
+        "parents": [FOLDER_ID]
+    }
+    media = MediaFileUpload(file_path, mimetype="application/json")
+    file = service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+    return file.get("id")
+
+# Descargar un archivo desde Google Drive
+def download_file(file_name):
+    query = f"name='{file_name}' and '{FOLDER_ID}' in parents"
+    results = service.files().list(q=query, fields="files(id, name)").execute()
+    items = results.get("files", [])
+
+    if not items:
+        return None
+
+    file_id = items[0]["id"]
+    request = service.files().get_media(fileId=file_id)
+    fh = BytesIO()
+    downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while not done:
+        status, done = downloader.next_chunk()
+
+    fh.seek(0)
+    return json.loads(fh.read().decode("utf-8"))
+
+# Guardar datos en Google Drive
+def save_signal(data):
+    with open(FILE_NAME, "w") as f:
+        json.dump(data, f)
+    upload_file(FILE_NAME, FILE_NAME)
+
+# Cargar datos desde Google Drive
+def load_signal():
+    data = download_file(FILE_NAME)
+    if data is None:
+        return {}
+    return data
 
 # Modelo para validar la entrada
 class Signal(BaseModel):
@@ -59,10 +98,9 @@ async def webhook(request: Request):
         # Si la señal es de 4H, actualizar la última señal para el símbolo
         if timeframe == "4h":
             print(f"Actualizando última señal de 4H para {symbol}: {action}")
+            last_signal_4h = load_signal()  # Cargar datos desde Google Drive
             last_signal_4h[symbol] = action
-            with open(SIGNAL_FILE, "w") as f:
-                json.dump(last_signal_4h, f)
-            print(f"Archivo actualizado en: {SIGNAL_FILE}")
+            save_signal(last_signal_4h)  # Guardar datos en Google Drive
             return {"message": f"Última señal de 4H registrada para {symbol}: {action}"}
         
         # Si la señal es de otro timeframe, verificar la tendencia de 4H
