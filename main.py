@@ -38,12 +38,25 @@ service = build("drive", "v3", credentials=creds)
 
 # Subir un archivo a Google Drive
 def upload_file(file_path, file_name):
-    file_metadata = {
-        "name": file_name,
-        "parents": [FOLDER_ID]
-    }
-    media = MediaFileUpload(file_path, mimetype="application/json")
-    file = service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+    # Buscar el archivo existente
+    query = f"name='{file_name}' and '{FOLDER_ID}' in parents"
+    results = service.files().list(q=query, fields="files(id)").execute()
+    items = results.get("files", [])
+
+    if items:
+        # Si el archivo existe, actualizarlo
+        file_id = items[0]["id"]
+        media = MediaFileUpload(file_path, mimetype="application/json")
+        file = service.files().update(fileId=file_id, media_body=media).execute()
+    else:
+        # Si el archivo no existe, crearlo
+        file_metadata = {
+            "name": file_name,
+            "parents": [FOLDER_ID]
+        }
+        media = MediaFileUpload(file_path, mimetype="application/json")
+        file = service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+    
     return file.get("id")
 
 # Descargar un archivo desde Google Drive
