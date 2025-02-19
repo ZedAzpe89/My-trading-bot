@@ -22,7 +22,13 @@ MAX_TRADES_PER_TYPE = 2
 # Configuración de Google Drive
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 GOOGLE_CREDENTIALS = os.getenv("GOOGLE_CREDENTIALS")  # Cargar credenciales desde la variable de entorno
-SERVICE_ACCOUNT_INFO = json.loads(GOOGLE_CREDENTIALS)  # Convertir la cadena JSON a un diccionario
+
+# Verificar y convertir la cadena JSON a un diccionario
+try:
+    SERVICE_ACCOUNT_INFO = json.loads(GOOGLE_CREDENTIALS)  # Convertir la cadena JSON a un diccionario
+except json.JSONDecodeError as e:
+    raise ValueError(f"Error al decodificar GOOGLE_CREDENTIALS: {e}")
+
 FOLDER_ID = "id-de-tu-carpeta"  # Reemplaza con el ID de la carpeta en Google Drive
 FILE_NAME = "last_signal_4h.json"  # Nombre del archivo en Google Drive
 
