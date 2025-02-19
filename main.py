@@ -12,9 +12,9 @@ app = FastAPI()
 
 # Configuración de la API de Capital.com
 CAPITAL_API_URL = "https://demo-api-capital.backend-capital.com/api/v1"
-API_KEY = "39iCQ2YJgYEvhUOr"  # Reemplaza con tu API Key    
-CUSTOM_PASSWORD = "MetEddRo1604*"  # Reemplaza con tu contraseña personalizada    
-ACCOUNT_ID = "eddrd89@outlook.com"  # Reemplaza con tu Account ID    
+API_KEY = os.getenv("CAPITAL_API_KEY")  # Reemplaza con tu API Key    
+CUSTOM_PASSWORD = os.getenv("CAPITAL_CUSTOM_PASSWORD")  # Reemplaza con tu contraseña personalizada    
+ACCOUNT_ID = os.getenv("CAPITAL_ACCOUNT_ID")  # Reemplaza con tu Account ID    
 
 # Máximo de 2 compras y 2 ventas por símbolo
 MAX_TRADES_PER_TYPE = 2
