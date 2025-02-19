@@ -52,7 +52,7 @@ async def webhook(request: Request):
             with open(SIGNAL_FILE, "w") as f:
                 json.dump(last_signal_4h, f)
             print(f"Última señal de 4H para {symbol}: {action}")
-            return {"message": f"Última señal de 4H registrada: {action}"}
+            return {"message": f"Última señal de 4H para {symbol} registrada: {action}"}
         
         # Si la señal es de otro timeframe, verificar la tendencia de 4H
         if symbol in last_signal_4h and last_signal_4h[symbol] != action:
