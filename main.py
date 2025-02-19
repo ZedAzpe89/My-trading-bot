@@ -10,9 +10,8 @@ API_KEY = "39iCQ2YJgYEvhUOr"  # Reemplaza con tu API Key
 CUSTOM_PASSWORD = "MetEddRo1604*"  # Reemplaza con tu contraseña personalizada   
 ACCOUNT_ID = "eddrd89@outlook.com"  # Reemplaza con tu Account ID   
 
-# Diccionario para rastrear operaciones por símbolo
-trade_limits = {}
-MAX_TRADES_PER_TYPE = 2  # Máximo de 2 compras y 2 ventas por símbolo
+# Máximo de 2 compras y 2 ventas por símbolo
+MAX_TRADES_PER_TYPE = 2
 
 # Modelo para validar la entrada
 class Signal(BaseModel):
@@ -34,20 +33,18 @@ async def webhook(request: Request):
         symbol = signal.symbol
         quantity = signal.quantity
         
-        # Verificar y actualizar el conteo de trades por símbolo
-        if symbol not in trade_limits:
-            trade_limits[symbol] = {"buy": 0, "sell": 0}
-        
-        if trade_limits[symbol][action] >= MAX_TRADES_PER_TYPE:
-            return {"message": f"Límite de {MAX_TRADES_PER_TYPE} operaciones {action} alcanzado para {symbol}"}
-        
         # Autenticar y obtener los tokens (CST y X-SECURITY-TOKEN)
         cst, x_security_token = authenticate()
-
+        
+        # Obtener el número de operaciones activas para el símbolo
+        active_trades = get_active_trades(cst, x_security_token, symbol)
+        
+        if active_trades[action] >= MAX_TRADES_PER_TYPE:
+            return {"message": f"Límite de {MAX_TRADES_PER_TYPE} operaciones {action} alcanzado para {symbol}"}
+        
         # Ejecutar la orden en Capital.com
         place_order(cst, x_security_token, action.upper(), symbol, quantity)
-        trade_limits[symbol][action] += 1  # Aumentar el conteo de operaciones
-
+        
         return {"message": "Orden ejecutada correctamente"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -69,9 +66,6 @@ def authenticate():
     if response.status_code != 200:
         raise Exception(f"Error de autenticación: {response.text}")
     
-    auth_data = response.json()
-    print("Datos completos de autenticación:", auth_data)
-    
     cst = response.headers.get("CST")
     x_security_token = response.headers.get("X-SECURITY-TOKEN")
     
@@ -79,6 +73,29 @@ def authenticate():
         raise Exception("No se encontraron los tokens necesarios (CST, X-SECURITY-TOKEN).")
     
     return cst, x_security_token
+
+# Función para obtener las operaciones activas por símbolo
+def get_active_trades(cst: str, x_security_token: str, symbol: str):
+    headers = {
+        "X-CAP-API-KEY": API_KEY,
+        "CST": cst,
+        "X-SECURITY-TOKEN": x_security_token,
+        "Content-Type": "application/json"
+    }
+    response = requests.get(f"{CAPITAL_API_URL}/positions", headers=headers)
+    
+    if response.status_code != 200:
+        raise Exception(f"Error al obtener posiciones abiertas: {response.text}")
+    
+    positions = response.json().get("positions", [])
+    
+    trade_count = {"buy": 0, "sell": 0}
+    for position in positions:
+        if position["market"]["epic"] == symbol:
+            direction = position["position"]["direction"].lower()
+            trade_count[direction] += 1
+    
+    return trade_count
 
 # Función para ejecutar una orden en Capital.com
 def place_order(cst: str, x_security_token: str, direction: str, epic: str, size: int = 10):
