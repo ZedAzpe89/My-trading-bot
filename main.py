@@ -18,14 +18,17 @@ MAX_TRADES_PER_TYPE = 2
 # Archivo para almacenar la última señal de 4H
 SIGNAL_FILE = "last_signal_4h.json"
 
-# Verificar si el archivo existe y cargar datos, si no, crearlo vacío
-if os.path.exists(SIGNAL_FILE):
-    with open(SIGNAL_FILE, "r") as f:
-        last_signal_4h = json.load(f)
-else:
-    last_signal_4h = {}
+# Verificar si el archivo existe y crearlo si no
+if not os.path.exists(SIGNAL_FILE):
     with open(SIGNAL_FILE, "w") as f:
-        json.dump(last_signal_4h, f)
+        json.dump({}, f)
+
+# Cargar el contenido del archivo
+with open(SIGNAL_FILE, "r") as f:
+    try:
+        last_signal_4h = json.load(f)
+    except json.JSONDecodeError:
+        last_signal_4h = {}
 
 # Modelo para validar la entrada
 class Signal(BaseModel):
