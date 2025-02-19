@@ -16,12 +16,16 @@ ACCOUNT_ID = "eddrd89@outlook.com"  # Reemplaza con tu Account ID
 MAX_TRADES_PER_TYPE = 2
 
 # Archivo para almacenar la última señal de 4H
-SIGNAL_FILE = r"C:\Users\Eduar\OneDrive\Documents\GitHub\My-trading-bot\last_signal_4h.json"
+SIGNAL_FILE = r"C:\Users\asdjr\OneDrive\Documents\GitHub\My-trading-bot\last_signal_4h.json"
 
 # Verificar si el archivo existe y crearlo si no
+print("Ruta del archivo:", SIGNAL_FILE)
 if not os.path.exists(SIGNAL_FILE):
     with open(SIGNAL_FILE, "w") as f:
         json.dump({}, f)
+    print(f"Archivo creado en: {SIGNAL_FILE}")
+else:
+    print(f"El archivo ya existe en: {SIGNAL_FILE}")
 
 # Cargar el contenido del archivo
 with open(SIGNAL_FILE, "r") as f:
@@ -54,9 +58,11 @@ async def webhook(request: Request):
         
         # Si la señal es de 4H, actualizar la última señal para el símbolo
         if timeframe == "4h":
+            print(f"Actualizando última señal de 4H para {symbol}: {action}")
             last_signal_4h[symbol] = action
             with open(SIGNAL_FILE, "w") as f:
                 json.dump(last_signal_4h, f)
+            print(f"Archivo actualizado en: {SIGNAL_FILE}")
             return {"message": f"Última señal de 4H registrada para {symbol}: {action}"}
         
         # Si la señal es de otro timeframe, verificar la tendencia de 4H
