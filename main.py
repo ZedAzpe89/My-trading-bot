@@ -114,10 +114,12 @@ async def webhook(request: Request):
         quantity = signal.quantity
         timeframe = signal.timeframe
         
+        # Cargar last_signal_4h desde Google Drive
+        last_signal_4h = load_signal()  # Cargar datos desde Google Drive
+        
         # Si la señal es de 4H, actualizar la última señal para el símbolo
         if timeframe == "4h":
             print(f"Actualizando última señal de 4H para {symbol}: {action}")
-            last_signal_4h = load_signal()  # Cargar datos desde Google Drive
             last_signal_4h[symbol] = action
             save_signal(last_signal_4h)  # Guardar datos en Google Drive
             return {"message": f"Última señal de 4H registrada para {symbol}: {action}"}
