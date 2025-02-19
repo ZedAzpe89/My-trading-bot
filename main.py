@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 import requests
+import json
 
 app = FastAPI()
 
@@ -122,8 +123,8 @@ def get_active_trades(cst: str, x_security_token: str, symbol: str):
     return trade_count
 
 # Función para ejecutar una orden en Capital.com
-def place_order(cst: str, x_security_token: str, direction: str, epic: str, size: int = 10):
-    MIN_SIZE = 100
+def place_order(cst: str, x_security_token: str, direction: str, epic: str, size: int = 1):
+    MIN_SIZE = 1
     if size < MIN_SIZE:
         raise Exception(f"El tamaño mínimo de la orden es {MIN_SIZE}. Estás intentando operar con un tamaño de {size}.")
     
