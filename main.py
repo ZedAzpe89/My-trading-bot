@@ -29,7 +29,7 @@ try:
 except json.JSONDecodeError as e:
     raise ValueError(f"Error al decodificar GOOGLE_CREDENTIALS: {e}")
 
-FOLDER_ID = "https://drive.google.com/drive/folders/1bKPwlyVt8a-EizPOTJYDioFNvaWqKja3"  # Reemplaza con el ID de la carpeta en Google Drive
+FOLDER_ID = "1bKPwlyVt8a-EizPOTJYDioFNvaWqKja3"  # Reemplaza con el ID de la carpeta en Google Drive
 FILE_NAME = "last_signal_4h.json"  # Nombre del archivo en Google Drive
 
 # Autenticación con Google Drive
