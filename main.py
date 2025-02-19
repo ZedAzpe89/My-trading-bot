@@ -13,11 +13,22 @@ ACCOUNT_ID = "eddrd89@outlook.com"  # Reemplaza con tu Account ID
 # Máximo de 2 compras y 2 ventas por símbolo
 MAX_TRADES_PER_TYPE = 2
 
+# Archivo para almacenar la última señal de 4H
+SIGNAL_FILE = "last_signal_4h.json"
+
+# Cargar la última señal de 4H desde un archivo
+try:
+    with open(SIGNAL_FILE, "r") as f:
+        last_signal_4h = json.load(f)
+except FileNotFoundError:
+    last_signal_4h = {}
+
 # Modelo para validar la entrada
 class Signal(BaseModel):
     action: str
     symbol: str
     quantity: int = 1
+    timeframe: str = "1m"  # Agregamos timeframe para diferenciar señales
 
 # Endpoint para recibir alertas de TradingView
 @app.post("/webhook")
@@ -32,6 +43,19 @@ async def webhook(request: Request):
         action = signal.action.lower()
         symbol = signal.symbol
         quantity = signal.quantity
+        timeframe = signal.timeframe
+        
+        # Si la señal es de 4H, actualizar la última señal para el símbolo
+        if timeframe == "4h":
+            last_signal_4h[symbol] = action
+            with open(SIGNAL_FILE, "w") as f:
+                json.dump(last_signal_4h, f)
+            print(f"Última señal de 4H para {symbol}: {action}")
+            return {"message": f"Última señal de 4H registrada: {action}"}
+        
+        # Si la señal es de otro timeframe, verificar la tendencia de 4H
+        if symbol in last_signal_4h and last_signal_4h[symbol] != action:
+            return {"message": f"Operación bloqueada, la última señal de 4H es {last_signal_4h[symbol]}"}
         
         # Autenticar y obtener los tokens (CST y X-SECURITY-TOKEN)
         cst, x_security_token = authenticate()
