@@ -16,7 +16,7 @@ ACCOUNT_ID = "eddrd89@outlook.com"  # Reemplaza con tu Account ID
 MAX_TRADES_PER_TYPE = 2
 
 # Archivo para almacenar la última señal de 4H
-SIGNAL_FILE = "last_signal_4h.json"
+SIGNAL_FILE = r"C:\Users\asdjr\OneDrive\Documents\GitHub\My-trading-bot\last_signal_4h.json"
 
 # Verificar si el archivo existe y crearlo si no
 if not os.path.exists(SIGNAL_FILE):
