@@ -2,14 +2,15 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 import requests
 import json
+import os
 
 app = FastAPI()
 
 # Configuración de la API de Capital.com
 CAPITAL_API_URL = "https://demo-api-capital.backend-capital.com/api/v1"
-API_KEY = "39iCQ2YJgYEvhUOr"  # Reemplaza con tu API Key   
-CUSTOM_PASSWORD = "MetEddRo1604*"  # Reemplaza con tu contraseña personalizada   
-ACCOUNT_ID = "eddrd89@outlook.com"  # Reemplaza con tu Account ID   
+API_KEY = "39iCQ2YJgYEvhUOr"  # Reemplaza con tu API Key    
+CUSTOM_PASSWORD = "MetEddRo1604*"  # Reemplaza con tu contraseña personalizada    
+ACCOUNT_ID = "eddrd89@outlook.com"  # Reemplaza con tu Account ID    
 
 # Máximo de 2 compras y 2 ventas por símbolo
 MAX_TRADES_PER_TYPE = 2
@@ -17,19 +18,21 @@ MAX_TRADES_PER_TYPE = 2
 # Archivo para almacenar la última señal de 4H
 SIGNAL_FILE = "last_signal_4h.json"
 
-# Cargar la última señal de 4H desde un archivo
-try:
+# Verificar si el archivo existe y cargar datos, si no, crearlo vacío
+if os.path.exists(SIGNAL_FILE):
     with open(SIGNAL_FILE, "r") as f:
         last_signal_4h = json.load(f)
-except FileNotFoundError:
+else:
     last_signal_4h = {}
+    with open(SIGNAL_FILE, "w") as f:
+        json.dump(last_signal_4h, f)
 
 # Modelo para validar la entrada
 class Signal(BaseModel):
     action: str
     symbol: str
     quantity: int = 1
-    timeframe: str = "1m"  # Agregamos timeframe para diferenciar señales
+    timeframe: str = "1m"  # Se agrega timeframe para diferenciar señales
 
 # Endpoint para recibir alertas de TradingView
 @app.post("/webhook")
@@ -51,12 +54,11 @@ async def webhook(request: Request):
             last_signal_4h[symbol] = action
             with open(SIGNAL_FILE, "w") as f:
                 json.dump(last_signal_4h, f)
-            print(f"Última señal de 4H para {symbol}: {action}")
-            return {"message": f"Última señal de 4H para {symbol} registrada: {action}"}
+            return {"message": f"Última señal de 4H registrada para {symbol}: {action}"}
         
         # Si la señal es de otro timeframe, verificar la tendencia de 4H
         if symbol in last_signal_4h and last_signal_4h[symbol] != action:
-            return {"message": f"Operación bloqueada, la última señal de 4H para {symbol} es: {last_signal_4h[symbol]}"}
+            return {"message": f"Operación bloqueada, la última señal de 4H es {last_signal_4h[symbol]}"}
         
         # Autenticar y obtener los tokens (CST y X-SECURITY-TOKEN)
         cst, x_security_token = authenticate()
