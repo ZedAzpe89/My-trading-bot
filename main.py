@@ -30,7 +30,7 @@ except json.JSONDecodeError as e:
     raise ValueError(f"Error al decodificar GOOGLE_CREDENTIALS: {e}")
 
 FOLDER_ID = "1bKPwlyVt8a-EizPOTJYDioFNvaWqKja3"  # Reemplaza con el ID de la carpeta en Google Drive
-FILE_NAME = "last_signal_4h.json"  # Nombre del archivo en Google Drive
+FILE_NAME = "last_signal_15m.json"  # Nombre del archivo en Google Drive
 
 # Autenticación con Google Drive
 creds = service_account.Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=SCOPES)
@@ -114,19 +114,19 @@ async def webhook(request: Request):
         quantity = signal.quantity
         timeframe = signal.timeframe
         
-        # Cargar last_signal_4h desde Google Drive
-        last_signal_4h = load_signal()  # Cargar datos desde Google Drive
+        # Cargar last_signal_15m desde Google Drive
+        last_signal_15m = load_signal()  # Cargar datos desde Google Drive
         
-        # Si la señal es de 4H, actualizar la última señal para el símbolo
-        if timeframe == "4h":
-            print(f"Actualizando última señal de 4H para {symbol}: {action}")
-            last_signal_4h[symbol] = action
-            save_signal(last_signal_4h)  # Guardar datos en Google Drive
-            return {"message": f"Última señal de 4H registrada para {symbol}: {action}"}
+        # Si la señal es de 15m, actualizar la última señal para el símbolo
+        if timeframe == "15m":
+            print(f"Actualizando última señal de 15m para {symbol}: {action}")
+            last_signal_15m[symbol] = action
+            save_signal(last_signal_15m)  # Guardar datos en Google Drive
+            return {"message": f"Última señal de 15m registrada para {symbol}: {action}"}
         
-        # Si la señal es de otro timeframe, verificar la tendencia de 4H
-        if symbol in last_signal_4h and last_signal_4h[symbol] != action:
-            return {"message": f"Operación bloqueada, la última señal de 4H es {last_signal_4h[symbol]}"}
+        # Si la señal es de otro timeframe, verificar la tendencia de 15m
+        if symbol in last_signal_15m and last_signal_15m[symbol] != action:
+            return {"message": f"Operación bloqueada, la última señal de 15m es {last_signal_15m[symbol]}"}
         
         # Autenticar y obtener los tokens (CST y X-SECURITY-TOKEN)
         cst, x_security_token = authenticate()
