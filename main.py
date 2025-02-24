@@ -113,7 +113,7 @@ async def webhook(request: Request):
             return {"message": f"Límite de {MAX_TRADES_PER_TYPE} operaciones {action} alcanzado para {symbol}"}
         
         place_order(cst, x_security_token, action.upper(), symbol, quantity)
-        print(f"Orden {action.upper()} ejecutada para {symbol} con cantidad {quantity}")
+        print(f"Orden {action.upper()} ejecutada correctamente para {symbol} con cantidad {quantity}")
         
         return {"message": "Orden ejecutada correctamente"}
     except Exception as e:
