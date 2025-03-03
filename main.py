@@ -79,6 +79,7 @@ class Signal(BaseModel):
     symbol: str
     quantity: int = 1
     timeframe: str = "1m"
+    source: str = "ema"  # Añadimos source con valor por defecto "ema"
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -89,29 +90,37 @@ async def webhook(request: Request):
         signal = Signal(**data)
         print("Datos recibidos y parseados:", signal)
         
-        action, symbol, quantity, timeframe = signal.action.lower(), signal.symbol, signal.quantity, signal.timeframe
+        action, symbol, quantity, timeframe, source = signal.action.lower(), signal.symbol, signal.quantity, signal.timeframe, signal.source
         last_signal_15m = load_signal()
         
+        # Actualizar última señal de 15m (independiente de la fuente)
         if timeframe == "15m":
             print(f"Actualizando última señal de 15m para {symbol}: {action}")
             last_signal_15m[symbol] = action
             save_signal(last_signal_15m)
             return {"message": f"Última señal de 15m registrada para {symbol}: {action}"}
         
-        if symbol in last_signal_15m and last_signal_15m[symbol] != action:
-            print(f"Operación bloqueada, última señal de 15m: {last_signal_15m[symbol]}")
-            return {"message": f"Operación bloqueada, la última señal de 15m es {last_signal_15m[symbol]}"}
+        # Aplicar restricciones solo a señales de EMA
+        if source == "ema":
+            if symbol in last_signal_15m and last_signal_15m[symbol] != action:
+                print(f"Operación bloqueada, última señal de 15m: {last_signal_15m[symbol]}")
+                return {"message": f"Operación bloqueada, la última señal de 15m es {last_signal_15m[symbol]}"}
         
-        cst, x_security_token = authenticate()
-        print("Autenticación exitosa en Capital.com")
-        
-        active_trades = get_active_trades(cst, x_security_token, symbol)
-        print(f"Operaciones activas para {symbol}: {active_trades}")
-        
-        if active_trades[action] >= MAX_TRADES_PER_TYPE:
-            print(f"Límite de {MAX_TRADES_PER_TYPE} operaciones {action} alcanzado para {symbol}")
-            return {"message": f"Límite de {MAX_TRADES_PER_TYPE} operaciones {action} alcanzado para {symbol}"}
-        
+            cst, x_security_token = authenticate()
+            print("Autenticación exitosa en Capital.com")
+            
+            active_trades = get_active_trades(cst, x_security_token, symbol)
+            print(f"Operaciones activas para {symbol}: {active_trades}")
+            
+            if active_trades[action] >= MAX_TRADES_PER_TYPE:
+                print(f"Límite de {MAX_TRADES_PER_TYPE} operaciones {action} alcanzado para {symbol}")
+                return {"message": f"Límite de {MAX_TRADES_PER_TYPE} operaciones {action} alcanzado para {symbol}"}
+        else:
+            # Para señales de RSI, autenticamos pero no verificamos límites
+            cst, x_security_token = authenticate()
+            print("Autenticación exitosa en Capital.com para RSI")
+
+        # Ejecutar la orden (sin restricciones para RSI)
         place_order(cst, x_security_token, action.upper(), symbol, quantity)
         print(f"Orden {action.upper()} ejecutada correctamente para {symbol} con cantidad {quantity}")
         
