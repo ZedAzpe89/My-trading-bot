@@ -207,18 +207,13 @@ def update_stop_loss(cst: str, x_security_token: str, deal_id: str, new_stop_los
 
 def close_position(cst: str, x_security_token: str, deal_id: str, epic: str, size: float):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token, "Content-Type": "application/json"}
-    # Usar POST /positions/otc para cerrar la posición con una orden opuesta
-    opposite_direction = "SELL" if open_positions[epic]["direction"] == "BUY" else "BUY"
+    # Usar PUT /positions/{dealId} para cerrar la posición
     payload = {
-        "dealId": deal_id,
-        "epic": epic,
-        "direction": opposite_direction,
-        "size": size,
-        "orderType": "MARKET",
-        "level": None,  # Precio de mercado
-        "timeInForce": "FILL_OR_KILL"
+        "size": size,  # Tamaño completo para cerrar toda la posición
+        "direction": "SELL" if open_positions[epic]["direction"] == "BUY" else "BUY",
+        "close": True  # Indicar cierre explícito (puede no ser necesario, pero lo incluimos por claridad)
     }
-    response = requests.post(f"{CAPITAL_API_URL}/positions/otc", headers=headers, json=payload)
+    response = requests.put(f"{CAPITAL_API_URL}/positions/{deal_id}", headers=headers, json=payload)
     if response.status_code != 200:
         error_msg = response.text
         print(f"Error en close_position: {error_msg}")
