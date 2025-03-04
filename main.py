@@ -71,25 +71,21 @@ def load_signal():
 class Signal(BaseModel):
     action: str
     symbol: str
-    quantity: float = 1.0
-    timeframe: str = "1m"
+    quantity: float = 10000.0
     source: str = "ema"
-    price: float
+    timeframe: str = "1m"
 
 def get_market_details(cst: str, x_security_token: str, epic: str):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
     response = requests.get(f"{CAPITAL_API_URL}/markets/{epic}", headers=headers)
     if response.status_code != 200:
         raise Exception(f"Error al obtener detalles del mercado: {response.text}")
-    
     details = response.json()
     print(f"Respuesta completa de /markets/{epic}: {json.dumps(details, indent=2)}")
-    
     min_size = details["dealingRules"]["minDealSize"]["value"]
-    min_stop_distance = details["dealingRules"]["minStopOrProfitDistance"]["value"] * details["snapshot"]["bid"] / 100  # Convertir porcentaje a puntos
     current_bid = details["snapshot"]["bid"]
     current_offer = details["snapshot"]["offer"]
-    return min_size, min_stop_distance, current_bid, current_offer
+    return min_size, current_bid, current_offer
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -100,7 +96,7 @@ async def webhook(request: Request):
         signal = Signal(**data)
         print("Datos recibidos y parseados:", signal.dict())
         
-        action, symbol, quantity, timeframe, source, entry_price = signal.action.lower(), signal.symbol, signal.quantity, signal.timeframe, signal.source, signal.price
+        action, symbol, quantity, source, timeframe = signal.action.lower(), signal.symbol, signal.quantity, signal.source, signal.timeframe
         last_signal_15m = load_signal()
         print(f"Última señal de 15m cargada: {last_signal_15m}")
         
@@ -113,38 +109,39 @@ async def webhook(request: Request):
         cst, x_security_token = authenticate()
         print("Autenticación exitosa en Capital.com")
         
+        min_size, current_bid, current_offer = get_market_details(cst, x_security_token, symbol)
+        adjusted_quantity = max(quantity, min_size)
+        if adjusted_quantity != quantity:
+            print(f"Ajustando quantity de {quantity} a {adjusted_quantity} para cumplir con el tamaño mínimo")
+        
+        entry_price = current_bid if action == "buy" else current_offer
+        initial_stop_loss = entry_price * (0.999 if action == "buy" else 1.001)  # -0.1% para buy, +0.1% para sell
+        
         active_trades = get_active_trades(cst, x_security_token, symbol)
         if active_trades["buy"] > 0 or active_trades["sell"] > 0:
             if symbol in open_positions:
                 pos = open_positions[symbol]
                 opposite_action = "sell" if pos["direction"] == "BUY" else "buy"
                 if action == opposite_action:
-                    close_position(cst, x_security_token, pos["dealId"], symbol, quantity)
-                    del open_positions[symbol]
+                    # Cerrar la posición actual
+                    close_position(cst, x_security_token, pos["dealId"], symbol, adjusted_quantity)
                     print(f"Posición cerrada para {symbol} por señal opuesta")
-                    return {"message": f"Posición cerrada para {symbol} por señal opuesta"}
+                    del open_positions[symbol]
+                    
+                    # Abrir nueva posición con la acción de la alerta
+                    deal_id = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, initial_stop_loss)
+                    print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL inicial {initial_stop_loss}")
+                    open_positions[symbol] = {
+                        "direction": action.upper(),
+                        "entry_price": entry_price,
+                        "stop_loss": initial_stop_loss,
+                        "dealId": deal_id
+                    }
+                    return {"message": f"Posición cerrada y nueva orden {action.upper()} ejecutada para {symbol}"}
             print(f"Operación rechazada: Ya hay una operación abierta para {symbol}")
             return {"message": f"Operación rechazada: Ya hay una operación abierta para {symbol}"}
         
-        min_size, min_stop_distance, current_bid, current_offer = get_market_details(cst, x_security_token, symbol)
-        adjusted_quantity = max(quantity, min_size)
-        if adjusted_quantity != quantity:
-            print(f"Ajustando quantity de {quantity} a {adjusted_quantity} para cumplir con el tamaño mínimo")
-        
-        # Usar precio de mercado si entry_price está muy lejos
-        market_price = current_bid if action == "buy" else current_offer
-        if abs(entry_price - market_price) > market_price * 0.05:  # Tolerancia del 5%
-            print(f"Advertencia: entry_price {entry_price} difiere mucho del mercado ({market_price}). Usando precio de mercado.")
-            entry_price = market_price
-        
-        desired_stop_loss = entry_price * (0.9 if action == "buy" else 1.1)
-        if action == "buy":
-            min_stop_level = entry_price - min_stop_distance
-            initial_stop_loss = max(desired_stop_loss, min_stop_level)
-        else:  # sell
-            max_stop_level = entry_price + min_stop_distance
-            initial_stop_loss = min(desired_stop_loss, max_stop_level)
-        
+        # Si no hay posición abierta, abrir una nueva
         deal_id = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, initial_stop_loss)
         print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL inicial {initial_stop_loss}")
         
@@ -196,10 +193,11 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
         print(f"Error en place_order: {error_msg}")
         raise Exception(f"Error al ejecutar la orden: {error_msg}")
     response_json = response.json()
-    if "dealId" not in response_json:
+    deal_key = "dealReference" if "dealReference" in response_json else "dealId"
+    if deal_key not in response_json:
         print(f"Respuesta inesperada: {response_json}")
-        raise Exception(f"No se encontró 'dealId' en la respuesta: {response_json}")
-    return response_json["dealId"]
+        raise Exception(f"No se encontró '{deal_key}' en la respuesta: {response_json}")
+    return response_json[deal_key]
 
 def update_stop_loss(cst: str, x_security_token: str, deal_id: str, new_stop_loss: float):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token, "Content-Type": "application/json"}
