@@ -150,7 +150,7 @@ async def webhook(request: Request):
             print(f"Ajustando quantity de {quantity} a {adjusted_quantity} para cumplir con el tamaño mínimo")
         
         entry_price = current_bid if action == "buy" else current_offer
-        initial_stop_loss = entry_price * (0.999 if action == "buy" else 1.001)
+        initial_stop_loss = entry_price * (0.9995 if action == "buy" else 1.0005)
         
         active_trades = get_active_trades(cst, x_security_token, symbol)
         if active_trades["buy"] > 0 or active_trades["sell"] > 0:
