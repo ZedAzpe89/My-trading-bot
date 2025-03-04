@@ -87,16 +87,37 @@ def get_market_details(cst: str, x_security_token: str, epic: str):
     current_offer = details["snapshot"]["offer"]
     return min_size, current_bid, current_offer
 
-def get_position_deal_id(cst: str, x_security_token: str, epic: str, direction: str):
+def get_position_details(cst: str, x_security_token: str, epic: str):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
     response = requests.get(f"{CAPITAL_API_URL}/positions", headers=headers)
     if response.status_code != 200:
         raise Exception(f"Error al obtener posiciones: {response.text}")
     positions = response.json().get("positions", [])
     for position in positions:
-        if position["market"]["epic"] == epic and position["position"]["direction"] == direction:
-            return position["position"]["dealId"]
-    raise Exception(f"No se encontró posición activa para {epic} en dirección {direction}")
+        if position["market"]["epic"] == epic:
+            return {
+                "dealId": position["position"]["dealId"],
+                "direction": position["position"]["direction"],
+                "entry_price": float(position["position"]["level"]),
+                "stop_loss": float(position["position"]["stopLevel"]) if position["position"]["stopLevel"] else None
+            }
+    return None
+
+def sync_open_positions(cst: str, x_security_token: str):
+    headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
+    response = requests.get(f"{CAPITAL_API_URL}/positions", headers=headers)
+    if response.status_code != 200:
+        raise Exception(f"Error al sincronizar posiciones: {response.text}")
+    positions = response.json().get("positions", [])
+    for pos in positions:
+        epic = pos["market"]["epic"]
+        open_positions[epic] = {
+            "direction": pos["position"]["direction"],
+            "entry_price": float(pos["position"]["level"]),
+            "stop_loss": float(pos["position"]["stopLevel"]) if pos["position"]["stopLevel"] else None,
+            "dealId": pos["position"]["dealId"]
+        }
+    print(f"Posiciones sincronizadas: {json.dumps(open_positions, indent=2)}")
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -119,6 +140,9 @@ async def webhook(request: Request):
         
         cst, x_security_token = authenticate()
         print("Autenticación exitosa en Capital.com")
+        
+        # Sincronizar posiciones abiertas desde Capital.com
+        sync_open_positions(cst, x_security_token)
         
         min_size, current_bid, current_offer = get_market_details(cst, x_security_token, symbol)
         adjusted_quantity = max(quantity, min_size)
@@ -186,6 +210,17 @@ def get_active_trades(cst: str, x_security_token: str, symbol: str):
         if position["market"]["epic"] == symbol:
             trade_count[position["position"]["direction"].lower()] += 1
     return trade_count
+
+def get_position_deal_id(cst: str, x_security_token: str, epic: str, direction: str):
+    headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
+    response = requests.get(f"{CAPITAL_API_URL}/positions", headers=headers)
+    if response.status_code != 200:
+        raise Exception(f"Error al obtener posiciones: {response.text}")
+    positions = response.json().get("positions", [])
+    for position in positions:
+        if position["market"]["epic"] == epic and position["position"]["direction"] == direction:
+            return position["position"]["dealId"]
+    raise Exception(f"No se encontró posición activa para {epic} en dirección {direction}")
 
 def place_order(cst: str, x_security_token: str, direction: str, epic: str, size: float, stop_loss: float = None):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token, "Content-Type": "application/json"}
