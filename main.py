@@ -10,7 +10,6 @@ from io import BytesIO
 
 app = FastAPI()
 
-# Configuración de la API de Capital.com
 CAPITAL_API_URL = "https://demo-api-capital.backend-capital.com/api/v1"
 API_KEY = os.getenv("API_KEY")
 CUSTOM_PASSWORD = os.getenv("CUSTOM_PASSWORD")
@@ -84,17 +83,13 @@ def get_market_details(cst: str, x_security_token: str, epic: str):
         raise Exception(f"Error al obtener detalles del mercado: {response.text}")
     
     details = response.json()
-    print(f"Respuesta completa de /markets/{epic}: {json.dumps(details, indent=2)}")  # Depuración
+    print(f"Respuesta completa de /markets/{epic}: {json.dumps(details, indent=2)}")
     
     min_size = details["dealingRules"]["minDealSize"]["value"]
-    
-    # Intentar obtener minStopDistance, con valor por defecto si no existe
-    try:
-        min_stop_distance = details["dealingRules"]["minStopDistance"]["value"]
-    except KeyError:
-        print(f"Advertencia: 'minStopDistance' no encontrado para {epic}. Usando valor por defecto.")
-        min_stop_distance = 0.005 * details["snapshot"]["bid"]  # 0.5% del precio bid como fallback
-    return min_size, min_stop_distance
+    min_stop_distance = details["dealingRules"]["minStopOrProfitDistance"]["value"] * details["snapshot"]["bid"] / 100  # Convertir porcentaje a puntos
+    current_bid = details["snapshot"]["bid"]
+    current_offer = details["snapshot"]["offer"]
+    return min_size, min_stop_distance, current_bid, current_offer
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -131,10 +126,16 @@ async def webhook(request: Request):
             print(f"Operación rechazada: Ya hay una operación abierta para {symbol}")
             return {"message": f"Operación rechazada: Ya hay una operación abierta para {symbol}"}
         
-        min_size, min_stop_distance = get_market_details(cst, x_security_token, symbol)
+        min_size, min_stop_distance, current_bid, current_offer = get_market_details(cst, x_security_token, symbol)
         adjusted_quantity = max(quantity, min_size)
         if adjusted_quantity != quantity:
             print(f"Ajustando quantity de {quantity} a {adjusted_quantity} para cumplir con el tamaño mínimo")
+        
+        # Usar precio de mercado si entry_price está muy lejos
+        market_price = current_bid if action == "buy" else current_offer
+        if abs(entry_price - market_price) > market_price * 0.05:  # Tolerancia del 5%
+            print(f"Advertencia: entry_price {entry_price} difiere mucho del mercado ({market_price}). Usando precio de mercado.")
+            entry_price = market_price
         
         desired_stop_loss = entry_price * (0.9 if action == "buy" else 1.1)
         if action == "buy":
@@ -194,7 +195,11 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
         error_msg = response.text
         print(f"Error en place_order: {error_msg}")
         raise Exception(f"Error al ejecutar la orden: {error_msg}")
-    return response.json()["dealId"]
+    response_json = response.json()
+    if "dealId" not in response_json:
+        print(f"Respuesta inesperada: {response_json}")
+        raise Exception(f"No se encontró 'dealId' en la respuesta: {response_json}")
+    return response_json["dealId"]
 
 def update_stop_loss(cst: str, x_security_token: str, deal_id: str, new_stop_loss: float):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token, "Content-Type": "application/json"}
