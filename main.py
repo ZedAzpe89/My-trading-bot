@@ -16,10 +16,8 @@ API_KEY = os.getenv("API_KEY")
 CUSTOM_PASSWORD = os.getenv("CUSTOM_PASSWORD")
 ACCOUNT_ID = os.getenv("ACCOUNT_ID")
 
-# Almacenar posiciones abiertas
-open_positions = {}  # {symbol: {"direction": "BUY/SELL", "entry_price": float, "stop_loss": float, "dealId": str}}
+open_positions = {}
 
-# Configuración de Google Drive
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 GOOGLE_CREDENTIALS = os.getenv("GOOGLE_CREDENTIALS")
 
@@ -84,9 +82,18 @@ def get_market_details(cst: str, x_security_token: str, epic: str):
     response = requests.get(f"{CAPITAL_API_URL}/markets/{epic}", headers=headers)
     if response.status_code != 200:
         raise Exception(f"Error al obtener detalles del mercado: {response.text}")
+    
     details = response.json()
+    print(f"Respuesta completa de /markets/{epic}: {json.dumps(details, indent=2)}")  # Depuración
+    
     min_size = details["dealingRules"]["minDealSize"]["value"]
-    min_stop_distance = details["dealingRules"]["minStopDistance"]["value"]
+    
+    # Intentar obtener minStopDistance, con valor por defecto si no existe
+    try:
+        min_stop_distance = details["dealingRules"]["minStopDistance"]["value"]
+    except KeyError:
+        print(f"Advertencia: 'minStopDistance' no encontrado para {epic}. Usando valor por defecto.")
+        min_stop_distance = 0.005 * details["snapshot"]["bid"]  # 0.5% del precio bid como fallback
     return min_size, min_stop_distance
 
 @app.post("/webhook")
@@ -124,22 +131,19 @@ async def webhook(request: Request):
             print(f"Operación rechazada: Ya hay una operación abierta para {symbol}")
             return {"message": f"Operación rechazada: Ya hay una operación abierta para {symbol}"}
         
-        # Obtener detalles del instrumento
         min_size, min_stop_distance = get_market_details(cst, x_security_token, symbol)
         adjusted_quantity = max(quantity, min_size)
         if adjusted_quantity != quantity:
             print(f"Ajustando quantity de {quantity} a {adjusted_quantity} para cumplir con el tamaño mínimo")
         
-        # Calcular stop loss inicial respetando la distancia mínima
         desired_stop_loss = entry_price * (0.9 if action == "buy" else 1.1)
         if action == "buy":
             min_stop_level = entry_price - min_stop_distance
-            initial_stop_loss = max(desired_stop_loss, min_stop_level)  # No más bajo que el mínimo permitido
+            initial_stop_loss = max(desired_stop_loss, min_stop_level)
         else:  # sell
             max_stop_level = entry_price + min_stop_distance
-            initial_stop_loss = min(desired_stop_loss, max_stop_level)  # No más alto que el máximo permitido
+            initial_stop_loss = min(desired_stop_loss, max_stop_level)
         
-        # Ejecutar la orden
         deal_id = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, initial_stop_loss)
         print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL inicial {initial_stop_loss}")
         
