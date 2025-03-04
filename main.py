@@ -16,8 +16,6 @@ API_KEY = os.getenv("API_KEY")
 CUSTOM_PASSWORD = os.getenv("CUSTOM_PASSWORD")
 ACCOUNT_ID = os.getenv("ACCOUNT_ID")
 
-MAX_TRADES_PER_TYPE = 2
-
 # Configuración de Google Drive
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 GOOGLE_CREDENTIALS = os.getenv("GOOGLE_CREDENTIALS")
@@ -33,11 +31,13 @@ FILE_NAME = "last_signal_15m.json"
 creds = service_account.Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=SCOPES)
 service = build("drive", "v3", credentials=creds)
 
+# Almacenar posiciones abiertas
+open_positions = {}  # {symbol: {"direction": "BUY/SELL", "entry_price": float, "stop_loss": float, "dealId": str}}
+
 def upload_file(file_path, file_name):
     query = f"name='{file_name}' and '{FOLDER_ID}' in parents"
     results = service.files().list(q=query, fields="files(id)").execute()
     items = results.get("files", [])
-
     if items:
         file_id = items[0]["id"]
         media = MediaFileUpload(file_path, mimetype="application/json")
@@ -51,10 +51,8 @@ def download_file(file_name):
     query = f"name='{file_name}' and '{FOLDER_ID}' in parents"
     results = service.files().list(q=query, fields="files(id, name)").execute()
     items = results.get("files", [])
-
     if not items:
         return {}
-
     file_id = items[0]["id"]
     request = service.files().get_media(fileId=file_id)
     fh = BytesIO()
@@ -62,7 +60,6 @@ def download_file(file_name):
     done = False
     while not done:
         _, done = downloader.next_chunk()
-    
     fh.seek(0)
     return json.loads(fh.read().decode("utf-8"))
 
@@ -79,7 +76,8 @@ class Signal(BaseModel):
     symbol: str
     quantity: int = 1
     timeframe: str = "1m"
-    source: str = "ema"  # Añadimos source con valor por defecto "ema"
+    source: str = "ema"
+    price: float  # Precio de entrada obligatorio
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -88,41 +86,56 @@ async def webhook(request: Request):
     
     try:
         signal = Signal(**data)
-        print("Datos recibidos y parseados:", signal)
+        print("Datos recibidos y parseados:", signal.dict())
         
-        action, symbol, quantity, timeframe, source = signal.action.lower(), signal.symbol, signal.quantity, signal.timeframe, signal.source
+        action, symbol, quantity, timeframe, source, entry_price = signal.action.lower(), signal.symbol, signal.quantity, signal.timeframe, signal.source, signal.price
         last_signal_15m = load_signal()
+        print(f"Última señal de 15m cargada: {last_signal_15m}")
         
-        # Actualizar última señal de 15m (independiente de la fuente)
+        # Actualizar última señal de 15m
         if timeframe == "15m":
             print(f"Actualizando última señal de 15m para {symbol}: {action}")
             last_signal_15m[symbol] = action
             save_signal(last_signal_15m)
             return {"message": f"Última señal de 15m registrada para {symbol}: {action}"}
         
-        # Aplicar restricciones solo a señales de EMA
-        if source == "ema":
-            if symbol in last_signal_15m and last_signal_15m[symbol] != action:
-                print(f"Operación bloqueada, última señal de 15m: {last_signal_15m[symbol]}")
-                return {"message": f"Operación bloqueada, la última señal de 15m es {last_signal_15m[symbol]}"}
+        cst, x_security_token = authenticate()
+        print("Autenticación exitosa en Capital.com")
         
-            cst, x_security_token = authenticate()
-            print("Autenticación exitosa en Capital.com")
-            
-            active_trades = get_active_trades(cst, x_security_token, symbol)
-            print(f"Operaciones activas para {symbol}: {active_trades}")
-            
-            if active_trades[action] >= MAX_TRADES_PER_TYPE:
-                print(f"Límite de {MAX_TRADES_PER_TYPE} operaciones {action} alcanzado para {symbol}")
-                return {"message": f"Límite de {MAX_TRADES_PER_TYPE} operaciones {action} alcanzado para {symbol}"}
-        else:
-            # Para señales de RSI, autenticamos pero no verificamos límites
-            cst, x_security_token = authenticate()
-            print("Autenticación exitosa en Capital.com para RSI")
-
-        # Ejecutar la orden (sin restricciones para RSI)
-        place_order(cst, x_security_token, action.upper(), symbol, quantity)
-        print(f"Orden {action.upper()} ejecutada correctamente para {symbol} con cantidad {quantity}")
+        # Verificar si ya hay una operación abierta
+        active_trades = get_active_trades(cst, x_security_token, symbol)
+        if active_trades["buy"] > 0 or active_trades["sell"] > 0:
+            # Revisar si la señal opuesta cierra la posición
+            if symbol in open_positions:
+                pos = open_positions[symbol]
+                opposite_action = "sell" if pos["direction"] == "BUY" else "buy"
+                if action == opposite_action:
+                    close_position(cst, x_security_token, pos["dealId"], symbol, quantity)
+                    del open_positions[symbol]
+                    print(f"Posición cerrada para {symbol} por señal opuesta")
+                    return {"message": f"Posición cerrada para {symbol} por señal opuesta"}
+            print(f"Operación rechazada: Ya hay una operación abierta para {symbol}")
+            return {"message": f"Operación rechazada: Ya hay una operación abierta para {symbol}"}
+        
+        # Verificar tendencia para señales EMA
+        if source == "ema" and symbol in last_signal_15m and last_signal_15m[symbol] != action:
+            print(f"Operación bloqueada, última señal de 15m: {last_signal_15m[symbol]}")
+            return {"message": f"Operación bloqueada, la última señal de 15m es {last_signal_15m[symbol]}"}
+        
+        # Calcular stop loss inicial
+        initial_stop_loss = entry_price * (0.9 if action == "buy" else 1.1)  # -10% para buy, +10% para sell
+        
+        # Ejecutar la orden con stop loss
+        deal_id = place_order(cst, x_security_token, action.upper(), symbol, quantity, initial_stop_loss)
+        print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL inicial {initial_stop_loss}")
+        
+        # Guardar posición abierta
+        open_positions[symbol] = {
+            "direction": action.upper(),
+            "entry_price": entry_price,
+            "stop_loss": initial_stop_loss,
+            "dealId": deal_id
+        }
         
         return {"message": "Orden ejecutada correctamente"}
     except Exception as e:
@@ -133,33 +146,84 @@ def authenticate():
     headers = {"X-CAP-API-KEY": API_KEY, "Content-Type": "application/json"}
     payload = {"identifier": ACCOUNT_ID, "password": CUSTOM_PASSWORD}
     response = requests.post(f"{CAPITAL_API_URL}/session", headers=headers, json=payload)
-    
     if response.status_code != 200:
         raise Exception(f"Error de autenticación: {response.text}")
-    
     return response.headers.get("CST"), response.headers.get("X-SECURITY-TOKEN")
 
 def get_active_trades(cst: str, x_security_token: str, symbol: str):
-    headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token, "Content-Type": "application/json"}
+    headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
     response = requests.get(f"{CAPITAL_API_URL}/positions", headers=headers)
-    
     if response.status_code != 200:
-        raise Exception(f"Error al obtener posiciones abiertas: {response.text}")
-    
+        raise Exception(f"Error al obtener posiciones: {response.text}")
     trade_count = {"buy": 0, "sell": 0}
     for position in response.json().get("positions", []):
         if position["market"]["epic"] == symbol:
             trade_count[position["position"]["direction"].lower()] += 1
-    
     return trade_count
 
-def place_order(cst: str, x_security_token: str, direction: str, epic: str, size: int = 1):
+def place_order(cst: str, x_security_token: str, direction: str, epic: str, size: int = 1, stop_loss: float = None):
     if size < 1:
         raise Exception("El tamaño mínimo de la orden es 1.")
-    
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token, "Content-Type": "application/json"}
-    payload = {"epic": epic, "direction": direction, "size": size, "type": "MARKET", "currencyCode": "USD"}
+    payload = {
+        "epic": epic,
+        "direction": direction,
+        "size": size,
+        "type": "MARKET",
+        "currencyCode": "USD"
+    }
+    if stop_loss:
+        payload["stopLevel"] = stop_loss
     response = requests.post(f"{CAPITAL_API_URL}/positions", headers=headers, json=payload)
-    
     if response.status_code != 200:
         raise Exception(f"Error al ejecutar la orden: {response.text}")
+    return response.json()["dealId"]
+
+def update_stop_loss(cst: str, x_security_token: str, deal_id: str, new_stop_loss: float):
+    headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token, "Content-Type": "application/json"}
+    payload = {"stopLevel": new_stop_loss}
+    response = requests.put(f"{CAPITAL_API_URL}/positions/{deal_id}", headers=headers, json=payload)
+    if response.status_code != 200:
+        raise Exception(f"Error al actualizar stop loss: {response.text}")
+
+def close_position(cst: str, x_security_token: str, deal_id: str, epic: str, size: int):
+    headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token, "Content-Type": "application/json"}
+    opposite_direction = "SELL" if open_positions[epic]["direction"] == "BUY" else "BUY"
+    payload = {"epic": epic, "direction": opposite_direction, "size": size}
+    response = requests.post(f"{CAPITAL_API_URL}/positions/close", headers=headers, json=payload)
+    if response.status_code != 200:
+        raise Exception(f"Error al cerrar posición: {response.text}")
+
+@app.post("/update_trailing")
+async def update_trailing(request: Request):
+    try:
+        data = await request.json()
+        symbol = data["symbol"]
+        current_price = float(data["current_price"])
+        
+        if symbol not in open_positions:
+            return {"message": f"No hay posición abierta para {symbol}"}
+        
+        pos = open_positions[symbol]
+        cst, x_security_token = authenticate()
+        
+        # Actualizar trailing stop (5% desde el máximo/mínimo)
+        if pos["direction"] == "BUY":
+            max_price = max(pos["entry_price"], current_price)
+            trailing_stop = max_price * 0.95  # 5% por debajo del máximo
+            if trailing_stop > pos["stop_loss"]:
+                update_stop_loss(cst, x_security_token, pos["dealId"], trailing_stop)
+                pos["stop_loss"] = trailing_stop
+                print(f"Trailing stop actualizado para {symbol}: {trailing_stop}")
+        else:  # SELL
+            min_price = min(pos["entry_price"], current_price)
+            trailing_stop = min_price * 1.05  # 5% por encima del mínimo
+            if trailing_stop < pos["stop_loss"]:
+                update_stop_loss(cst, x_security_token, pos["dealId"], trailing_stop)
+                pos["stop_loss"] = trailing_stop
+                print(f"Trailing stop actualizado para {symbol}: {trailing_stop}")
+        
+        return {"message": f"Trailing stop actualizado para {symbol}"}
+    except Exception as e:
+        print(f"Error al actualizar trailing stop: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
