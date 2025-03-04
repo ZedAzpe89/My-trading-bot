@@ -115,7 +115,7 @@ async def webhook(request: Request):
             print(f"Ajustando quantity de {quantity} a {adjusted_quantity} para cumplir con el tamaño mínimo")
         
         entry_price = current_bid if action == "buy" else current_offer
-        initial_stop_loss = entry_price * (0.999 if action == "buy" else 1.001)  # -0.1% para buy, +0.1% para sell
+        initial_stop_loss = entry_price * (0.999 if action == "buy" else 1.001)
         
         active_trades = get_active_trades(cst, x_security_token, symbol)
         if active_trades["buy"] > 0 or active_trades["sell"] > 0:
@@ -141,7 +141,6 @@ async def webhook(request: Request):
             print(f"Operación rechazada: Ya hay una operación abierta para {symbol}")
             return {"message": f"Operación rechazada: Ya hay una operación abierta para {symbol}"}
         
-        # Si no hay posición abierta, abrir una nueva
         deal_id = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, initial_stop_loss)
         print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL inicial {initial_stop_loss}")
         
@@ -208,11 +207,22 @@ def update_stop_loss(cst: str, x_security_token: str, deal_id: str, new_stop_los
 
 def close_position(cst: str, x_security_token: str, deal_id: str, epic: str, size: float):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token, "Content-Type": "application/json"}
+    # Usar POST /positions/otc para cerrar la posición con una orden opuesta
     opposite_direction = "SELL" if open_positions[epic]["direction"] == "BUY" else "BUY"
-    payload = {"epic": epic, "direction": opposite_direction, "size": size}
-    response = requests.post(f"{CAPITAL_API_URL}/positions/close", headers=headers, json=payload)
+    payload = {
+        "dealId": deal_id,
+        "epic": epic,
+        "direction": opposite_direction,
+        "size": size,
+        "orderType": "MARKET",
+        "level": None,  # Precio de mercado
+        "timeInForce": "FILL_OR_KILL"
+    }
+    response = requests.post(f"{CAPITAL_API_URL}/positions/otc", headers=headers, json=payload)
     if response.status_code != 200:
-        raise Exception(f"Error al cerrar posición: {response.text}")
+        error_msg = response.text
+        print(f"Error en close_position: {error_msg}")
+        raise Exception(f"Error al cerrar posición: {error_msg}")
 
 @app.post("/update_trailing")
 async def update_trailing(request: Request):
