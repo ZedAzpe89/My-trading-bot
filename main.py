@@ -123,12 +123,12 @@ async def webhook(request: Request):
                 pos = open_positions[symbol]
                 opposite_action = "sell" if pos["direction"] == "BUY" else "buy"
                 if action == opposite_action:
-                    # Cerrar la posición actual
+                    # Depuración del dealId antes de cerrar
+                    print(f"Intentando cerrar posición para {symbol} con dealId: {pos['dealId']}")
                     close_position(cst, x_security_token, pos["dealId"], symbol, adjusted_quantity)
                     print(f"Posición cerrada para {symbol} por señal opuesta")
                     del open_positions[symbol]
                     
-                    # Abrir nueva posición con la acción de la alerta
                     deal_id = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, initial_stop_loss)
                     print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL inicial {initial_stop_loss}")
                     open_positions[symbol] = {
@@ -192,6 +192,7 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
         print(f"Error en place_order: {error_msg}")
         raise Exception(f"Error al ejecutar la orden: {error_msg}")
     response_json = response.json()
+    print(f"Respuesta completa de place_order: {json.dumps(response_json, indent=2)}")
     deal_key = "dealReference" if "dealReference" in response_json else "dealId"
     if deal_key not in response_json:
         print(f"Respuesta inesperada: {response_json}")
@@ -207,13 +208,8 @@ def update_stop_loss(cst: str, x_security_token: str, deal_id: str, new_stop_los
 
 def close_position(cst: str, x_security_token: str, deal_id: str, epic: str, size: float):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token, "Content-Type": "application/json"}
-    # Usar PUT /positions/{dealId} para cerrar la posición
-    payload = {
-        "size": size,  # Tamaño completo para cerrar toda la posición
-        "direction": "SELL" if open_positions[epic]["direction"] == "BUY" else "BUY",
-        "close": True  # Indicar cierre explícito (puede no ser necesario, pero lo incluimos por claridad)
-    }
-    response = requests.put(f"{CAPITAL_API_URL}/positions/{deal_id}", headers=headers, json=payload)
+    # Usar DELETE /positions/{dealId} para cerrar la posición
+    response = requests.delete(f"{CAPITAL_API_URL}/positions/{deal_id}", headers=headers)
     if response.status_code != 200:
         error_msg = response.text
         print(f"Error en close_position: {error_msg}")
