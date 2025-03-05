@@ -7,6 +7,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 from io import BytesIO
+import time
 
 app = FastAPI()
 
@@ -296,9 +297,9 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
             payload["stopLevel"] = round(stop_loss, 5)
             print(f"Enviando stopLevel: {payload['stopLevel']} para {epic}")
     
-    # Intentar enviar la orden sin stopLevel para depuración
+    # Intentar enviar la orden con y sin stopLevel para depuración
     try:
-        response = requests.post(f"{CAPITAL_API_URL}/positions", headers=headers, json=payload)
+        response = requests.post(f"{CAPITAL_API_URL}/positions", headers=headers, json=payload, timeout=10)
         if response.status_code != 200:
             error_msg = response.text
             print(f"Error en place_order con stopLevel: {error_msg}")
@@ -306,7 +307,7 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
             if "stopLevel" in payload:
                 del payload["stopLevel"]
                 print("Reintentando sin stopLevel...")
-                response = requests.post(f"{CAPITAL_API_URL}/positions", headers=headers, json=payload)
+                response = requests.post(f"{CAPITAL_API_URL}/positions", headers=headers, json=payload, timeout=10)
                 if response.status_code != 200:
                     error_msg = response.text
                     print(f"Error en place_order sin stopLevel: {error_msg}")
