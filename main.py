@@ -130,13 +130,11 @@ def sync_open_positions(cst: str, x_security_token: str):
             min_size, current_bid, current_offer, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
             adjusted_quantity = open_positions[symbol]["quantity"]
             entry_price = current_bid if open_positions[symbol]["direction"] == "SELL" else current_offer
-            initial_stop_loss = calculate_valid_stop_loss(entry_price, open_positions[symbol]["direction"], min_stop_distance, max_stop_distance)
-            new_direction = "BUY" if open_positions[symbol]["direction"] == "SELL" else "SELL"
-            deal_ref = place_order(cst, x_security_token, new_direction, symbol, adjusted_quantity, None)  # Sin stopLevel por ahora
-            deal_id = get_position_deal_id(cst, x_security_token, symbol, new_direction)
-            print(f"Orden {new_direction} ejecutada para {symbol} a {entry_price} sin stopLevel, dealId: {deal_id}")
+            deal_ref = place_order(cst, x_security_token, "BUY" if open_positions[symbol]["direction"] == "SELL" else "SELL", symbol, adjusted_quantity, None)  # Sin stopLevel
+            deal_id = get_position_deal_id(cst, x_security_token, symbol, "BUY" if open_positions[symbol]["direction"] == "SELL" else "SELL")
+            print(f"Orden {'BUY' if open_positions[symbol]['direction'] == 'SELL' else 'SELL'} ejecutada para {symbol} a {entry_price} sin stopLevel, dealId: {deal_id}")
             synced_positions[symbol] = {
-                "direction": new_direction,
+                "direction": "BUY" if open_positions[symbol]["direction"] == "SELL" else "SELL",
                 "entry_price": entry_price,
                 "stop_loss": None,  # Sin stop loss inicial por ahora
                 "dealId": deal_id,
