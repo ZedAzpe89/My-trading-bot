@@ -86,7 +86,8 @@ def get_market_details(cst: str, x_security_token: str, epic: str):
     current_bid = details["snapshot"]["bid"]
     current_offer = details["snapshot"]["offer"]
     min_stop_distance = details["dealingRules"]["minStopOrProfitDistance"]["value"] if "minStopOrProfitDistance" in details["dealingRules"] else 0.01  # Valor por defecto 0.01%
-    return min_size, current_bid, current_offer, min_stop_distance
+    max_stop_distance = details["dealingRules"]["maxStopOrProfitDistance"]["value"] if "maxStopOrProfitDistance" in details["dealingRules"] else None
+    return min_size, current_bid, current_offer, min_stop_distance, max_stop_distance
 
 def get_position_details(cst: str, x_security_token: str, epic: str):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
@@ -125,10 +126,10 @@ def sync_open_positions(cst: str, x_security_token: str):
     for symbol in list(open_positions.keys()):
         if symbol not in synced_positions and symbol in open_positions:
             print(f"Posición cerrada detectada para {symbol} (probablemente por stop loss o comisiones)")
-            min_size, current_bid, current_offer, min_stop_distance = get_market_details(cst, x_security_token, symbol)
+            min_size, current_bid, current_offer, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
             adjusted_quantity = open_positions[symbol]["quantity"]
             entry_price = current_bid if open_positions[symbol]["direction"] == "SELL" else current_offer
-            initial_stop_loss = calculate_valid_stop_loss(entry_price, open_positions[symbol]["direction"], min_stop_distance)
+            initial_stop_loss = calculate_valid_stop_loss(entry_price, open_positions[symbol]["direction"], min_stop_distance, max_stop_distance)
             new_direction = "BUY" if open_positions[symbol]["direction"] == "SELL" else "SELL"
             deal_ref = place_order(cst, x_security_token, new_direction, symbol, adjusted_quantity, initial_stop_loss)
             deal_id = get_position_deal_id(cst, x_security_token, symbol, new_direction)
@@ -146,18 +147,27 @@ def sync_open_positions(cst: str, x_security_token: str):
     open_positions.update(synced_positions)
     print(f"Posiciones sincronizadas: {json.dumps(open_positions, indent=2)}")
 
-def calculate_valid_stop_loss(entry_price, direction, min_stop_distance):
-    if min_stop_distance <= 0:
-        min_stop_distance = 0.01  # Valor por defecto si no se proporciona (0.01%)
-    min_stop_value = entry_price * (min_stop_distance / 100) if isinstance(min_stop_distance, float) else 0.01  # Convertir % a valor absoluto
-    # Limitar a 5 decimales desde el inicio
+def calculate_valid_stop_loss(entry_price, direction, min_stop_distance, max_stop_distance=None):
+    # Redondear entry_price a 5 decimales para USDMXN
     entry_price = round(entry_price, 5)
+    if min_stop_distance <= 0:
+        min_stop_distance = 0.01  # Valor por defecto 0.01%
+    min_stop_value = entry_price * (min_stop_distance / 100) if isinstance(min_stop_distance, float) else 0.01  # Convertir % a valor absoluto
+    if max_stop_distance:
+        max_stop_value = entry_price * (max_stop_distance / 100) if isinstance(max_stop_distance, float) else None
+    
     if direction == "BUY":
         stop_loss = round(entry_price * 0.9995, 5)  # -0.05%, redondeado a 5 decimales
-        return max(stop_loss, round(entry_price - min_stop_value, 5))  # Asegurar distancia mínima, redondeado
+        final_stop = max(stop_loss, round(entry_price - min_stop_value, 5))  # Asegurar distancia mínima
+        if max_stop_distance and final_stop < (entry_price - round(entry_price * (max_stop_distance / 100), 5)):
+            final_stop = entry_price - round(entry_price * (max_stop_distance / 100), 5)  # Asegurar distancia máxima
+        return final_stop
     else:
         stop_loss = round(entry_price * 1.0005, 5)  # +0.05%, redondeado a 5 decimales
-        return min(stop_loss, round(entry_price + min_stop_value, 5))  # Asegurar distancia mínima, redondeado
+        final_stop = min(stop_loss, round(entry_price + min_stop_value, 5))  # Asegurar distancia mínima
+        if max_stop_distance and final_stop > (entry_price + round(entry_price * (max_stop_distance / 100), 5)):
+            final_stop = entry_price + round(entry_price * (max_stop_distance / 100), 5)  # Asegurar distancia máxima
+        return final_stop
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -183,7 +193,7 @@ async def webhook(request: Request):
         
         sync_open_positions(cst, x_security_token)
         
-        min_size, current_bid, current_offer, min_stop_distance = get_market_details(cst, x_security_token, symbol)
+        min_size, current_bid, current_offer, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
         adjusted_quantity = max(quantity, min_size)
         if adjusted_quantity != quantity:
             print(f"Ajustando quantity de {quantity} a {adjusted_quantity} para cumplir con el tamaño mínimo")
@@ -191,7 +201,7 @@ async def webhook(request: Request):
         entry_price = current_bid if action == "buy" else current_offer
         # Redondear entry_price a 5 decimales
         entry_price = round(entry_price, 5)
-        initial_stop_loss = calculate_valid_stop_loss(entry_price, action.upper(), min_stop_distance)
+        initial_stop_loss = calculate_valid_stop_loss(entry_price, action.upper(), min_stop_distance, max_stop_distance)
         
         print(f"Stop Loss calculado: {initial_stop_loss} para entrada a {entry_price}")
         
