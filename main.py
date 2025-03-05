@@ -73,7 +73,7 @@ class Signal(BaseModel):
     action: str
     symbol: str
     quantity: float = 10000.0
-    source: str = "ema"
+    source: str = "rsi"
     timeframe: str = "1m"
 
 def get_market_details(cst: str, x_security_token: str, epic: str):
@@ -119,7 +119,7 @@ def sync_open_positions(cst: str, x_security_token: str):
         synced_positions[epic] = {
             "direction": pos["position"]["direction"],
             "entry_price": float(pos["position"]["level"]),
-            "stop_loss": float(pos["position"]["stopLevel"]) if pos["position"]["stopLevel"] else None,
+            "stop_loss": None,  # Forzar a None para evitar problemas
             "dealId": pos["position"]["dealId"],
             "quantity": float(pos["position"]["size"])
         }
@@ -127,14 +127,15 @@ def sync_open_positions(cst: str, x_security_token: str):
     for symbol in list(open_positions.keys()):
         if symbol not in synced_positions and symbol in open_positions:
             print(f"Posición cerrada detectada para {symbol} (probablemente por stop loss o comisiones)")
-            min_size, current_bid, current_offer, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
+            min_size, current_bid, current_offer, _, _ = get_market_details(cst, x_security_token, symbol)
             adjusted_quantity = open_positions[symbol]["quantity"]
             entry_price = current_bid if open_positions[symbol]["direction"] == "SELL" else current_offer
-            deal_ref = place_order(cst, x_security_token, "BUY" if open_positions[symbol]["direction"] == "SELL" else "SELL", symbol, adjusted_quantity, None)  # Sin stopLevel
-            deal_id = get_position_deal_id(cst, x_security_token, symbol, "BUY" if open_positions[symbol]["direction"] == "SELL" else "SELL")
-            print(f"Orden {'BUY' if open_positions[symbol]['direction'] == 'SELL' else 'SELL'} ejecutada para {symbol} a {entry_price} sin stopLevel, dealId: {deal_id}")
+            new_direction = "BUY" if open_positions[symbol]["direction"] == "SELL" else "SELL"
+            deal_ref = place_order(cst, x_security_token, new_direction, symbol, adjusted_quantity, None)  # Sin stopLevel
+            deal_id = get_position_deal_id(cst, x_security_token, symbol, new_direction)
+            print(f"Orden {new_direction} ejecutada para {symbol} a {entry_price} sin stopLevel, dealId: {deal_id}")
             synced_positions[symbol] = {
-                "direction": "BUY" if open_positions[symbol]["direction"] == "SELL" else "SELL",
+                "direction": new_direction,
                 "entry_price": entry_price,
                 "stop_loss": None,  # Sin stop loss inicial por ahora
                 "dealId": deal_id,
@@ -147,7 +148,7 @@ def sync_open_positions(cst: str, x_security_token: str):
     print(f"Posiciones sincronizadas: {json.dumps(open_positions, indent=2)}")
 
 def calculate_valid_stop_loss(entry_price, direction, min_stop_distance, max_stop_distance=None):
-    # Redondear entry_price a 5 decimales para USDMXN/EURUSD
+    # Mantenemos esta función para futuros ajustes, pero no se usa por ahora
     entry_price = round(entry_price, 5)
     if min_stop_distance <= 0:
         min_stop_distance = 0.01  # Valor por defecto 0.01%
@@ -194,7 +195,7 @@ async def webhook(request: Request):
         
         sync_open_positions(cst, x_security_token)
         
-        min_size, current_bid, current_offer, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
+        min_size, current_bid, current_offer, _, _ = get_market_details(cst, x_security_token, symbol)
         adjusted_quantity = max(quantity, min_size)
         if adjusted_quantity != quantity:
             print(f"Ajustando quantity de {quantity} a {adjusted_quantity} para cumplir con el tamaño mínimo")
@@ -202,9 +203,8 @@ async def webhook(request: Request):
         entry_price = current_bid if action == "buy" else current_offer
         # Redondear entry_price a 5 decimales
         entry_price = round(entry_price, 5)
-        initial_stop_loss = calculate_valid_stop_loss(entry_price, action.upper(), min_stop_distance, max_stop_distance)
         
-        print(f"Stop Loss calculado: {initial_stop_loss} para entrada a {entry_price}")
+        print(f"Entrada calculada: {entry_price} para {symbol}")
         
         active_trades = get_active_trades(cst, x_security_token, symbol)
         if active_trades["buy"] > 0 or active_trades["sell"] > 0:
@@ -213,25 +213,29 @@ async def webhook(request: Request):
                 opposite_action = "sell" if pos["direction"] == "BUY" else "buy"
                 if action == opposite_action:
                     print(f"Intentando cerrar posición para {symbol} con dealId: {pos['dealId']}")
-                    close_position(cst, x_security_token, pos["dealId"], symbol, adjusted_quantity)
-                    print(f"Posición cerrada para {symbol} por señal opuesta")
-                    del open_positions[symbol]
-                    
-                    deal_ref = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, None)  # Sin stopLevel por ahora
-                    deal_id = get_position_deal_id(cst, x_security_token, symbol, action.upper())
-                    print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} sin stopLevel, dealId: {deal_id}")
-                    open_positions[symbol] = {
-                        "direction": action.upper(),
-                        "entry_price": entry_price,
-                        "stop_loss": None,  # Sin stop loss inicial por ahora
-                        "dealId": deal_id,
-                        "quantity": adjusted_quantity
-                    }
-                    return {"message": f"Posición cerrada y nueva orden {action.upper()} ejecutada para {symbol}"}
+                    try:
+                        close_position(cst, x_security_token, pos["dealId"], symbol, adjusted_quantity)
+                        print(f"Posición cerrada para {symbol} por señal opuesta")
+                        del open_positions[symbol]
+                        
+                        deal_ref = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, None)  # Sin stopLevel
+                        deal_id = get_position_deal_id(cst, x_security_token, symbol, action.upper())
+                        print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} sin stopLevel, dealId: {deal_id}")
+                        open_positions[symbol] = {
+                            "direction": action.upper(),
+                            "entry_price": entry_price,
+                            "stop_loss": None,  # Sin stop loss inicial por ahora
+                            "dealId": deal_id,
+                            "quantity": adjusted_quantity
+                        }
+                        return {"message": f"Posición cerrada y nueva orden {action.upper()} ejecutada para {symbol}"}
+                    except Exception as e:
+                        print(f"Error al cerrar posición o abrir nueva: {e}")
+                        raise HTTPException(status_code=500, detail=str(e))
             print(f"Operación rechazada: Ya hay una operación abierta para {symbol}")
             return {"message": f"Operación rechazada: Ya hay una operación abierta para {symbol}"}
         
-        deal_ref = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, None)  # Sin stopLevel por ahora
+        deal_ref = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, None)  # Sin stopLevel
         deal_id = get_position_deal_id(cst, x_security_token, symbol, action.upper())
         print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} sin stopLevel, dealId: {deal_id}")
         
@@ -322,11 +326,15 @@ def update_stop_loss(cst: str, x_security_token: str, deal_id: str, new_stop_los
 
 def close_position(cst: str, x_security_token: str, deal_id: str, epic: str, size: float):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
-    response = requests.delete(f"{CAPITAL_API_URL}/positions/{deal_id}", headers=headers)
-    if response.status_code != 200:
-        error_msg = response.text
-        print(f"Error en close_position: {error_msg}")
-        raise Exception(f"Error al cerrar posición: {error_msg}")
+    try:
+        response = requests.delete(f"{CAPITAL_API_URL}/positions/{deal_id}", headers=headers, timeout=10)
+        if response.status_code != 200:
+            error_msg = response.text
+            print(f"Error en close_position: {error_msg}")
+            raise Exception(f"Error al cerrar posición: {error_msg}")
+    except Exception as e:
+        raise Exception(f"Error al cerrar posición: {str(e)}")
+    print(f"Posición cerrada exitosamente para dealId: {deal_id}")
 
 @app.post("/update_trailing")
 async def update_trailing(request: Request):
