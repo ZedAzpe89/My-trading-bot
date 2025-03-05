@@ -161,12 +161,14 @@ def calculate_valid_stop_loss(entry_price, direction, min_stop_distance, max_sto
         final_stop = max(stop_loss, round(entry_price - min_stop_value, 5))  # Asegurar distancia mínima
         if max_stop_distance and final_stop < (entry_price - round(entry_price * (max_stop_distance / 100), 5)):
             final_stop = entry_price - round(entry_price * (max_stop_distance / 100), 5)  # Asegurar distancia máxima
+        print(f"Stop Loss para BUY calculado: {final_stop}, entry_price: {entry_price}, min_stop: {min_stop_value}, max_stop: {max_stop_value}")
         return final_stop
     else:
         stop_loss = round(entry_price * 1.0005, 5)  # +0.05%, redondeado a 5 decimales
         final_stop = min(stop_loss, round(entry_price + min_stop_value, 5))  # Asegurar distancia mínima
         if max_stop_distance and final_stop > (entry_price + round(entry_price * (max_stop_distance / 100), 5)):
             final_stop = entry_price + round(entry_price * (max_stop_distance / 100), 5)  # Asegurar distancia máxima
+        print(f"Stop Loss para SELL calculado: {final_stop}, entry_price: {entry_price}, min_stop: {min_stop_value}, max_stop: {max_stop_value}")
         return final_stop
 
 @app.post("/webhook")
@@ -286,19 +288,34 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
         "type": "MARKET",
         "currencyCode": "USD"
     }
-    # Temporalmente omitir stopLevel para depuración
-    # if stop_loss is not None:
-    #     if not isinstance(stop_loss, (int, float)) or stop_loss <= 0:
-    #         print(f"Advertencia: stop_loss inválido ({stop_loss}), omitiendo stopLevel")
-    #     else:
-    #         payload["stopLevel"] = round(stop_loss, 5)
-    #         print(f"Enviando stopLevel: {payload['stopLevel']} para {epic}")
+    if stop_loss is not None:
+        if not isinstance(stop_loss, (int, float)) or stop_loss <= 0:
+            print(f"Advertencia: stop_loss inválido ({stop_loss}), omitiendo stopLevel")
+        else:
+            # Asegurar exactamente 5 decimales para USDMXN y verificar límites
+            payload["stopLevel"] = round(stop_loss, 5)
+            print(f"Enviando stopLevel: {payload['stopLevel']} para {epic}")
     
-    response = requests.post(f"{CAPITAL_API_URL}/positions", headers=headers, json=payload)
-    if response.status_code != 200:
-        error_msg = response.text
-        print(f"Error en place_order: {error_msg}")
-        raise Exception(f"Error al ejecutar la orden: {error_msg}")
+    # Intentar enviar la orden sin stopLevel para depuración
+    try:
+        response = requests.post(f"{CAPITAL_API_URL}/positions", headers=headers, json=payload)
+        if response.status_code != 200:
+            error_msg = response.text
+            print(f"Error en place_order con stopLevel: {error_msg}")
+            # Intentar sin stopLevel si falla
+            if "stopLevel" in payload:
+                del payload["stopLevel"]
+                print("Reintentando sin stopLevel...")
+                response = requests.post(f"{CAPITAL_API_URL}/positions", headers=headers, json=payload)
+                if response.status_code != 200:
+                    error_msg = response.text
+                    print(f"Error en place_order sin stopLevel: {error_msg}")
+                    raise Exception(f"Error al ejecutar la orden: {error_msg}")
+            else:
+                raise Exception(f"Error al ejecutar la orden: {error_msg}")
+    except Exception as e:
+        raise Exception(f"Error al ejecutar la orden: {str(e)}")
+    
     response_json = response.json()
     print(f"Respuesta completa de place_order: {json.dumps(response_json, indent=2)}")
     deal_key = "dealReference" if "dealReference" in response_json else "dealId"
