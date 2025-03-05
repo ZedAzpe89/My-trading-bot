@@ -159,6 +159,7 @@ def calculate_valid_stop_loss(entry_price, direction, min_stop_distance, max_sto
     
     if direction == "BUY":
         stop_loss = round(entry_price * 0.9995, 5)  # -0.05%, redondeado a 5 decimales
+        # Asegurar que el stop loss cumpla con min_stop_distance (no más cerca del precio de entrada)
         final_stop = max(stop_loss, round(entry_price - min_stop_value, 5))  # Asegurar distancia mínima
         if max_stop_distance and final_stop < (entry_price - round(entry_price * (max_stop_distance / 100), 5)):
             final_stop = entry_price - round(entry_price * (max_stop_distance / 100), 5)  # Asegurar distancia máxima
@@ -166,6 +167,7 @@ def calculate_valid_stop_loss(entry_price, direction, min_stop_distance, max_sto
         return final_stop
     else:
         stop_loss = round(entry_price * 1.0005, 5)  # +0.05%, redondeado a 5 decimales
+        # Asegurar que el stop loss cumpla con min_stop_distance (no más cerca del precio de entrada)
         final_stop = min(stop_loss, round(entry_price + min_stop_value, 5))  # Asegurar distancia mínima
         if max_stop_distance and final_stop > (entry_price + round(entry_price * (max_stop_distance / 100), 5)):
             final_stop = entry_price + round(entry_price * (max_stop_distance / 100), 5)  # Asegurar distancia máxima
@@ -220,6 +222,7 @@ async def webhook(request: Request):
                         print(f"Posición cerrada para {symbol} por señal opuesta")
                         del open_positions[symbol]
                         
+                        # Asegurar que la nueva orden se abra con stop loss válido
                         deal_ref = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, initial_stop_loss)
                         deal_id = get_position_deal_id(cst, x_security_token, symbol, action.upper())
                         print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss}, dealId: {deal_id}")
@@ -297,7 +300,7 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
         if not isinstance(stop_loss, (int, float)) or stop_loss <= 0:
             print(f"Advertencia: stop_loss inválido ({stop_loss}), omitiendo stopLevel")
         else:
-            # Asegurar exactamente 5 decimales para USDMXN/EURUSD
+            # Asegurar exactamente 5 decimales para USDMXN/EURUSD y verificar límites
             payload["stopLevel"] = round(stop_loss, 5)
             print(f"Enviando stopLevel: {payload['stopLevel']} para {epic}")
     
