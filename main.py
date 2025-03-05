@@ -85,7 +85,7 @@ def get_market_details(cst: str, x_security_token: str, epic: str):
     min_size = details["dealingRules"]["minDealSize"]["value"]
     current_bid = details["snapshot"]["bid"]
     current_offer = details["snapshot"]["offer"]
-    min_stop_distance = details["dealingRules"]["minStopOrProfitDistance"]["value"]  # Obtener la distancia mínima
+    min_stop_distance = details["dealingRules"]["minStopOrProfitDistance"]["value"] if "minStopOrProfitDistance" in details["dealingRules"] else 0.01  # Valor por defecto
     return min_size, current_bid, current_offer, min_stop_distance
 
 def get_position_details(cst: str, x_security_token: str, epic: str):
@@ -124,11 +124,11 @@ def sync_open_positions(cst: str, x_security_token: str):
     
     for symbol in list(open_positions.keys()):
         if symbol not in synced_positions and symbol in open_positions:
-            print(f"Posición cerrada detectada para {symbol} (probablemente por stop loss)")
-            min_size, current_bid, current_offer, _ = get_market_details(cst, x_security_token, symbol)
+            print(f"Posición cerrada detectada para {symbol} (probablemente por stop loss o comisiones)")
+            min_size, current_bid, current_offer, min_stop_distance = get_market_details(cst, x_security_token, symbol)
             adjusted_quantity = open_positions[symbol]["quantity"]
             entry_price = current_bid if open_positions[symbol]["direction"] == "SELL" else current_offer
-            initial_stop_loss = entry_price * (0.9995 if open_positions[symbol]["direction"] == "SELL" else 1.0005)
+            initial_stop_loss = calculate_valid_stop_loss(entry_price, open_positions[symbol]["direction"], min_stop_distance)
             new_direction = "BUY" if open_positions[symbol]["direction"] == "SELL" else "SELL"
             deal_ref = place_order(cst, x_security_token, new_direction, symbol, adjusted_quantity, initial_stop_loss)
             deal_id = get_position_deal_id(cst, x_security_token, symbol, new_direction)
@@ -145,6 +145,15 @@ def sync_open_positions(cst: str, x_security_token: str):
     open_positions.clear()
     open_positions.update(synced_positions)
     print(f"Posiciones sincronizadas: {json.dumps(open_positions, indent=2)}")
+
+def calculate_valid_stop_loss(entry_price, direction, min_stop_distance):
+    if min_stop_distance <= 0:
+        min_stop_distance = 0.01  # Valor por defecto si no se proporciona
+    min_stop_value = entry_price * (min_stop_distance / 100) if isinstance(min_stop_distance, float) else 0.01
+    if direction == "BUY":
+        return entry_price * 0.9995  # -0.05%, ajustado si necesario
+    else:
+        return entry_price * 1.0005  # +0.05%, ajustado si necesario
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -176,14 +185,7 @@ async def webhook(request: Request):
             print(f"Ajustando quantity de {quantity} a {adjusted_quantity} para cumplir con el tamaño mínimo")
         
         entry_price = current_bid if action == "buy" else current_offer
-        # Ajustar initial_stop_loss para cumplir con la distancia mínima
-        initial_stop_loss = entry_price * (0.9995 if action == "buy" else 1.0005)
-        if min_stop_distance:
-            min_stop_value = entry_price * (min_stop_distance / 100) if min_stop_distance > 0 else 0.0001  # Valor mínimo por defecto
-            if action == "buy":
-                initial_stop_loss = max(initial_stop_loss, entry_price - min_stop_value)
-            else:
-                initial_stop_loss = min(initial_stop_loss, entry_price + min_stop_value)
+        initial_stop_loss = calculate_valid_stop_loss(entry_price, action.upper(), min_stop_distance)
         
         print(f"Stop Loss calculado: {initial_stop_loss} para entrada a {entry_price}")
         
@@ -269,11 +271,11 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
         "currencyCode": "USD"
     }
     if stop_loss is not None:
-        # Asegurarnos de que stop_loss sea un número válido y no None
         if not isinstance(stop_loss, (int, float)) or stop_loss <= 0:
-            raise ValueError(f"stop_loss inválido: {stop_loss}")
-        payload["stopLevel"] = stop_loss
-        print(f"Enviando stopLevel: {stop_loss} para {epic}")
+            print(f"Advertencia: stop_loss inválido ({stop_loss}), omitiendo stopLevel")
+        else:
+            payload["stopLevel"] = stop_loss
+            print(f"Enviando stopLevel: {stop_loss} para {epic}")
     
     response = requests.post(f"{CAPITAL_API_URL}/positions", headers=headers, json=payload)
     if response.status_code != 200:
