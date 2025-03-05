@@ -85,7 +85,8 @@ def get_market_details(cst: str, x_security_token: str, epic: str):
     min_size = details["dealingRules"]["minDealSize"]["value"]
     current_bid = details["snapshot"]["bid"]
     current_offer = details["snapshot"]["offer"]
-    return min_size, current_bid, current_offer
+    min_stop_distance = details["dealingRules"]["minStopOrProfitDistance"]["value"]  # Obtener la distancia mínima
+    return min_size, current_bid, current_offer, min_stop_distance
 
 def get_position_details(cst: str, x_security_token: str, epic: str):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
@@ -99,7 +100,8 @@ def get_position_details(cst: str, x_security_token: str, epic: str):
                 "dealId": position["position"]["dealId"],
                 "direction": position["position"]["direction"],
                 "entry_price": float(position["position"]["level"]),
-                "stop_loss": float(position["position"]["stopLevel"]) if position["position"]["stopLevel"] else None
+                "stop_loss": float(position["position"]["stopLevel"]) if position["position"]["stopLevel"] else None,
+                "quantity": float(position["position"]["size"])
             }
     return None
 
@@ -109,14 +111,39 @@ def sync_open_positions(cst: str, x_security_token: str):
     if response.status_code != 200:
         raise Exception(f"Error al sincronizar posiciones: {response.text}")
     positions = response.json().get("positions", [])
+    synced_positions = {}
     for pos in positions:
         epic = pos["market"]["epic"]
-        open_positions[epic] = {
+        synced_positions[epic] = {
             "direction": pos["position"]["direction"],
             "entry_price": float(pos["position"]["level"]),
             "stop_loss": float(pos["position"]["stopLevel"]) if pos["position"]["stopLevel"] else None,
-            "dealId": pos["position"]["dealId"]
+            "dealId": pos["position"]["dealId"],
+            "quantity": float(pos["position"]["size"])
         }
+    
+    for symbol in list(open_positions.keys()):
+        if symbol not in synced_positions and symbol in open_positions:
+            print(f"Posición cerrada detectada para {symbol} (probablemente por stop loss)")
+            min_size, current_bid, current_offer, _ = get_market_details(cst, x_security_token, symbol)
+            adjusted_quantity = open_positions[symbol]["quantity"]
+            entry_price = current_bid if open_positions[symbol]["direction"] == "SELL" else current_offer
+            initial_stop_loss = entry_price * (0.9995 if open_positions[symbol]["direction"] == "SELL" else 1.0005)
+            new_direction = "BUY" if open_positions[symbol]["direction"] == "SELL" else "SELL"
+            deal_ref = place_order(cst, x_security_token, new_direction, symbol, adjusted_quantity, initial_stop_loss)
+            deal_id = get_position_deal_id(cst, x_security_token, symbol, new_direction)
+            print(f"Orden {new_direction} ejecutada para {symbol} a {entry_price} con SL inicial {initial_stop_loss}, dealId: {deal_id}")
+            synced_positions[symbol] = {
+                "direction": new_direction,
+                "entry_price": entry_price,
+                "stop_loss": initial_stop_loss,
+                "dealId": deal_id,
+                "quantity": adjusted_quantity
+            }
+            del open_positions[symbol]
+    
+    open_positions.clear()
+    open_positions.update(synced_positions)
     print(f"Posiciones sincronizadas: {json.dumps(open_positions, indent=2)}")
 
 @app.post("/webhook")
@@ -141,16 +168,24 @@ async def webhook(request: Request):
         cst, x_security_token = authenticate()
         print("Autenticación exitosa en Capital.com")
         
-        # Sincronizar posiciones abiertas desde Capital.com
         sync_open_positions(cst, x_security_token)
         
-        min_size, current_bid, current_offer = get_market_details(cst, x_security_token, symbol)
+        min_size, current_bid, current_offer, min_stop_distance = get_market_details(cst, x_security_token, symbol)
         adjusted_quantity = max(quantity, min_size)
         if adjusted_quantity != quantity:
             print(f"Ajustando quantity de {quantity} a {adjusted_quantity} para cumplir con el tamaño mínimo")
         
         entry_price = current_bid if action == "buy" else current_offer
+        # Ajustar initial_stop_loss para cumplir con la distancia mínima
         initial_stop_loss = entry_price * (0.9995 if action == "buy" else 1.0005)
+        if min_stop_distance:
+            min_stop_value = entry_price * (min_stop_distance / 100) if min_stop_distance > 0 else 0.0001  # Valor mínimo por defecto
+            if action == "buy":
+                initial_stop_loss = max(initial_stop_loss, entry_price - min_stop_value)
+            else:
+                initial_stop_loss = min(initial_stop_loss, entry_price + min_stop_value)
+        
+        print(f"Stop Loss calculado: {initial_stop_loss} para entrada a {entry_price}")
         
         active_trades = get_active_trades(cst, x_security_token, symbol)
         if active_trades["buy"] > 0 or active_trades["sell"] > 0:
@@ -170,7 +205,8 @@ async def webhook(request: Request):
                         "direction": action.upper(),
                         "entry_price": entry_price,
                         "stop_loss": initial_stop_loss,
-                        "dealId": deal_id
+                        "dealId": deal_id,
+                        "quantity": adjusted_quantity
                     }
                     return {"message": f"Posición cerrada y nueva orden {action.upper()} ejecutada para {symbol}"}
             print(f"Operación rechazada: Ya hay una operación abierta para {symbol}")
@@ -184,7 +220,8 @@ async def webhook(request: Request):
             "direction": action.upper(),
             "entry_price": entry_price,
             "stop_loss": initial_stop_loss,
-            "dealId": deal_id
+            "dealId": deal_id,
+            "quantity": adjusted_quantity
         }
         
         return {"message": "Orden ejecutada correctamente"}
@@ -231,8 +268,13 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
         "type": "MARKET",
         "currencyCode": "USD"
     }
-    if stop_loss:
+    if stop_loss is not None:
+        # Asegurarnos de que stop_loss sea un número válido y no None
+        if not isinstance(stop_loss, (int, float)) or stop_loss <= 0:
+            raise ValueError(f"stop_loss inválido: {stop_loss}")
         payload["stopLevel"] = stop_loss
+        print(f"Enviando stopLevel: {stop_loss} para {epic}")
+    
     response = requests.post(f"{CAPITAL_API_URL}/positions", headers=headers, json=payload)
     if response.status_code != 200:
         error_msg = response.text
