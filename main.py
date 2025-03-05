@@ -150,12 +150,14 @@ def calculate_valid_stop_loss(entry_price, direction, min_stop_distance):
     if min_stop_distance <= 0:
         min_stop_distance = 0.01  # Valor por defecto si no se proporciona (0.01%)
     min_stop_value = entry_price * (min_stop_distance / 100) if isinstance(min_stop_distance, float) else 0.01  # Convertir % a valor absoluto
+    # Limitar a 5 decimales desde el inicio
+    entry_price = round(entry_price, 5)
     if direction == "BUY":
-        stop_loss = entry_price * 0.9995  # -0.05%
-        return max(stop_loss, entry_price - min_stop_value)  # Asegurar distancia mínima
+        stop_loss = round(entry_price * 0.9995, 5)  # -0.05%, redondeado a 5 decimales
+        return max(stop_loss, round(entry_price - min_stop_value, 5))  # Asegurar distancia mínima, redondeado
     else:
-        stop_loss = entry_price * 1.0005  # +0.05%
-        return min(stop_loss, entry_price + min_stop_value)  # Asegurar distancia mínima
+        stop_loss = round(entry_price * 1.0005, 5)  # +0.05%, redondeado a 5 decimales
+        return min(stop_loss, round(entry_price + min_stop_value, 5))  # Asegurar distancia mínima, redondeado
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -187,6 +189,8 @@ async def webhook(request: Request):
             print(f"Ajustando quantity de {quantity} a {adjusted_quantity} para cumplir con el tamaño mínimo")
         
         entry_price = current_bid if action == "buy" else current_offer
+        # Redondear entry_price a 5 decimales
+        entry_price = round(entry_price, 5)
         initial_stop_loss = calculate_valid_stop_loss(entry_price, action.upper(), min_stop_distance)
         
         print(f"Stop Loss calculado: {initial_stop_loss} para entrada a {entry_price}")
@@ -276,7 +280,7 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
         if not isinstance(stop_loss, (int, float)) or stop_loss <= 0:
             print(f"Advertencia: stop_loss inválido ({stop_loss}), omitiendo stopLevel")
         else:
-            # Redondear a 5 decimales para USDMXN
+            # Asegurar exactamente 5 decimales para USDMXN
             payload["stopLevel"] = round(stop_loss, 5)
             print(f"Enviando stopLevel: {payload['stopLevel']} para {epic}")
     
@@ -295,7 +299,7 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
 
 def update_stop_loss(cst: str, x_security_token: str, deal_id: str, new_stop_loss: float):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token, "Content-Type": "application/json"}
-    payload = {"stopLevel": new_stop_loss}
+    payload = {"stopLevel": round(new_stop_loss, 5)}  # Redondear a 5 decimales
     response = requests.put(f"{CAPITAL_API_URL}/positions/{deal_id}", headers=headers, json=payload)
     if response.status_code != 200:
         raise Exception(f"Error al actualizar stop loss: {response.text}")
@@ -323,14 +327,14 @@ async def update_trailing(request: Request):
         
         if pos["direction"] == "BUY":
             max_price = max(pos["entry_price"], current_price)
-            trailing_stop = max_price * 0.95
+            trailing_stop = round(max_price * 0.95, 5)  # Redondear a 5 decimales
             if trailing_stop > pos["stop_loss"]:
                 update_stop_loss(cst, x_security_token, pos["dealId"], trailing_stop)
                 pos["stop_loss"] = trailing_stop
                 print(f"Trailing stop actualizado para {symbol}: {trailing_stop}")
         else:  # SELL
             min_price = min(pos["entry_price"], current_price)
-            trailing_stop = min_price * 1.05
+            trailing_stop = round(min_price * 1.05, 5)  # Redondear a 5 decimales
             if trailing_stop < pos["stop_loss"]:
                 update_stop_loss(cst, x_security_token, pos["dealId"], trailing_stop)
                 pos["stop_loss"] = trailing_stop
