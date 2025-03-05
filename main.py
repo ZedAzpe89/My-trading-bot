@@ -132,13 +132,13 @@ def sync_open_positions(cst: str, x_security_token: str):
             entry_price = current_bid if open_positions[symbol]["direction"] == "SELL" else current_offer
             initial_stop_loss = calculate_valid_stop_loss(entry_price, open_positions[symbol]["direction"], min_stop_distance, max_stop_distance)
             new_direction = "BUY" if open_positions[symbol]["direction"] == "SELL" else "SELL"
-            deal_ref = place_order(cst, x_security_token, new_direction, symbol, adjusted_quantity, initial_stop_loss)
+            deal_ref = place_order(cst, x_security_token, new_direction, symbol, adjusted_quantity, None)  # Sin stopLevel por ahora
             deal_id = get_position_deal_id(cst, x_security_token, symbol, new_direction)
-            print(f"Orden {new_direction} ejecutada para {symbol} a {entry_price} con SL inicial {initial_stop_loss}, dealId: {deal_id}")
+            print(f"Orden {new_direction} ejecutada para {symbol} a {entry_price} sin stopLevel, dealId: {deal_id}")
             synced_positions[symbol] = {
                 "direction": new_direction,
                 "entry_price": entry_price,
-                "stop_loss": initial_stop_loss,
+                "stop_loss": None,  # Sin stop loss inicial por ahora
                 "dealId": deal_id,
                 "quantity": adjusted_quantity
             }
@@ -149,7 +149,7 @@ def sync_open_positions(cst: str, x_security_token: str):
     print(f"Posiciones sincronizadas: {json.dumps(open_positions, indent=2)}")
 
 def calculate_valid_stop_loss(entry_price, direction, min_stop_distance, max_stop_distance=None):
-    # Redondear entry_price a 5 decimales para USDMXN
+    # Redondear entry_price a 5 decimales para USDMXN/EURUSD
     entry_price = round(entry_price, 5)
     if min_stop_distance <= 0:
         min_stop_distance = 0.01  # Valor por defecto 0.01%
@@ -219,13 +219,13 @@ async def webhook(request: Request):
                     print(f"Posición cerrada para {symbol} por señal opuesta")
                     del open_positions[symbol]
                     
-                    deal_ref = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, initial_stop_loss)
+                    deal_ref = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, None)  # Sin stopLevel por ahora
                     deal_id = get_position_deal_id(cst, x_security_token, symbol, action.upper())
-                    print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL inicial {initial_stop_loss}, dealId: {deal_id}")
+                    print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} sin stopLevel, dealId: {deal_id}")
                     open_positions[symbol] = {
                         "direction": action.upper(),
                         "entry_price": entry_price,
-                        "stop_loss": initial_stop_loss,
+                        "stop_loss": None,  # Sin stop loss inicial por ahora
                         "dealId": deal_id,
                         "quantity": adjusted_quantity
                     }
@@ -233,14 +233,14 @@ async def webhook(request: Request):
             print(f"Operación rechazada: Ya hay una operación abierta para {symbol}")
             return {"message": f"Operación rechazada: Ya hay una operación abierta para {symbol}"}
         
-        deal_ref = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, initial_stop_loss)
+        deal_ref = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, None)  # Sin stopLevel por ahora
         deal_id = get_position_deal_id(cst, x_security_token, symbol, action.upper())
-        print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL inicial {initial_stop_loss}, dealId: {deal_id}")
+        print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} sin stopLevel, dealId: {deal_id}")
         
         open_positions[symbol] = {
             "direction": action.upper(),
             "entry_price": entry_price,
-            "stop_loss": initial_stop_loss,
+            "stop_loss": None,  # Sin stop loss inicial por ahora
             "dealId": deal_id,
             "quantity": adjusted_quantity
         }
@@ -289,31 +289,21 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
         "type": "MARKET",
         "currencyCode": "USD"
     }
-    if stop_loss is not None:
-        if not isinstance(stop_loss, (int, float)) or stop_loss <= 0:
-            print(f"Advertencia: stop_loss inválido ({stop_loss}), omitiendo stopLevel")
-        else:
-            # Asegurar exactamente 5 decimales para USDMXN y verificar límites
-            payload["stopLevel"] = round(stop_loss, 5)
-            print(f"Enviando stopLevel: {payload['stopLevel']} para {epic}")
+    # Omitir stopLevel por ahora para depuración
+    # if stop_loss is not None:
+    #     if not isinstance(stop_loss, (int, float)) or stop_loss <= 0:
+    #         print(f"Advertencia: stop_loss inválido ({stop_loss}), omitiendo stopLevel")
+    #     else:
+    #         payload["stopLevel"] = round(stop_loss, 5)
+    #         print(f"Enviando stopLevel: {payload['stopLevel']} para {epic}")
     
-    # Intentar enviar la orden con y sin stopLevel para depuración
+    # Intentar enviar la orden sin stopLevel para depuración
     try:
         response = requests.post(f"{CAPITAL_API_URL}/positions", headers=headers, json=payload, timeout=10)
         if response.status_code != 200:
             error_msg = response.text
-            print(f"Error en place_order con stopLevel: {error_msg}")
-            # Intentar sin stopLevel si falla
-            if "stopLevel" in payload:
-                del payload["stopLevel"]
-                print("Reintentando sin stopLevel...")
-                response = requests.post(f"{CAPITAL_API_URL}/positions", headers=headers, json=payload, timeout=10)
-                if response.status_code != 200:
-                    error_msg = response.text
-                    print(f"Error en place_order sin stopLevel: {error_msg}")
-                    raise Exception(f"Error al ejecutar la orden: {error_msg}")
-            else:
-                raise Exception(f"Error al ejecutar la orden: {error_msg}")
+            print(f"Error en place_order sin stopLevel: {error_msg}")
+            raise Exception(f"Error al ejecutar la orden: {error_msg}")
     except Exception as e:
         raise Exception(f"Error al ejecutar la orden: {str(e)}")
     
