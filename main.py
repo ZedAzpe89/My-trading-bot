@@ -286,13 +286,13 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
         "type": "MARKET",
         "currencyCode": "USD"
     }
-    if stop_loss is not None:
-        if not isinstance(stop_loss, (int, float)) or stop_loss <= 0:
-            print(f"Advertencia: stop_loss inválido ({stop_loss}), omitiendo stopLevel")
-        else:
-            # Asegurar exactamente 5 decimales para USDMXN
-            payload["stopLevel"] = round(stop_loss, 5)
-            print(f"Enviando stopLevel: {payload['stopLevel']} para {epic}")
+    # Temporalmente omitir stopLevel para depuración
+    # if stop_loss is not None:
+    #     if not isinstance(stop_loss, (int, float)) or stop_loss <= 0:
+    #         print(f"Advertencia: stop_loss inválido ({stop_loss}), omitiendo stopLevel")
+    #     else:
+    #         payload["stopLevel"] = round(stop_loss, 5)
+    #         print(f"Enviando stopLevel: {payload['stopLevel']} para {epic}")
     
     response = requests.post(f"{CAPITAL_API_URL}/positions", headers=headers, json=payload)
     if response.status_code != 200:
