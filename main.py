@@ -16,6 +16,10 @@ API_KEY = os.getenv("API_KEY")
 CUSTOM_PASSWORD = os.getenv("CUSTOM_PASSWORD")
 ACCOUNT_ID = os.getenv("ACCOUNT_ID")
 
+# Configuración de Telegram
+TELEGRAM_TOKEN = "tu-telegram-token-aqui"  # Reemplaza con el token de tu bot
+TELEGRAM_CHAT_ID = "tu-chat-id-aqui"       # Reemplaza con el chat ID de tu grupo
+
 open_positions = {}
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
@@ -32,6 +36,20 @@ POSITIONS_FILE_NAME = "open_positions.json"  # Nuevo archivo para guardar posici
 
 creds = service_account.Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=SCOPES)
 service = build("drive", "v3", credentials=creds)
+
+def send_telegram_message(message):
+    """Envía un mensaje a Telegram."""
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message
+    }
+    try:
+        response = requests.post(url, json=payload)
+        if response.status_code != 200:
+            print(f"Error al enviar mensaje a Telegram: {response.text}")
+    except Exception as e:
+        print(f"Error al enviar mensaje a Telegram: {str(e)}")
 
 def upload_file(file_path, file_name):
     query = f"name='{file_name}' and '{FOLDER_ID}' in parents"
@@ -85,6 +103,7 @@ async def startup_event():
     open_positions = load_positions()
     cst, x_security_token = authenticate()
     sync_open_positions(cst, x_security_token)
+    send_telegram_message("🚀 Bot iniciado correctamente.")
 
 class Signal(BaseModel):
     action: str
@@ -160,10 +179,10 @@ def calculate_valid_stop_loss(entry_price, direction, min_stop_distance, max_sto
     if max_stop_distance:
         max_stop_value = entry_price * (max_stop_distance / 100) if isinstance(max_stop_distance, float) else None
     
-    # Cantidad fija de pérdida: $5 USD con quantity=10,000 y apalancamiento=100 (ajustado para cumplir minStopOrProfitDistance)
+    # Cantidad fija de pérdida: $5 USD con quantity=10,000 y apalancamiento=100
     quantity = 10000.0  # Cantidad fija por operación
     leverage = 100.0    # Apalancamiento 100:1
-    loss_amount_usd = 5.0  # Pérdida fija de $5 USD por operación (ajustado de $3 a $5 para cumplir con minStopOrProfitDistance)
+    loss_amount_usd = 5.0  # Pérdida fija de $5 USD por operación
     
     # Calcular el cambio en el precio para una pérdida de $5 USD
     price_change = (loss_amount_usd * leverage) / quantity  # Cambio en el precio por $5 USD de pérdida
@@ -231,6 +250,7 @@ async def webhook(request: Request):
                     try:
                         close_position(cst, x_security_token, pos["dealId"], symbol, adjusted_quantity)
                         print(f"Posición cerrada para {symbol} por señal opuesta")
+                        send_telegram_message(f"🔒 Posición cerrada para {symbol}: {pos['direction']} a {pos['entry_price']}")
                         del open_positions[symbol]
                         
                         # Verificar si hay posiciones abiertas antes de abrir una nueva
@@ -239,6 +259,7 @@ async def webhook(request: Request):
                             deal_ref = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, initial_stop_loss)
                             deal_id = get_position_deal_id(cst, x_security_token, symbol, action.upper())
                             print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss}, dealId: {deal_id}")
+                            send_telegram_message(f"📈 Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss} (dealId: {deal_id})")
                             open_positions[symbol] = {
                                 "direction": action.upper(),
                                 "entry_price": entry_price,
@@ -252,13 +273,16 @@ async def webhook(request: Request):
                             raise Exception(f"No se pudo abrir la nueva orden: aún hay posiciones abiertas para {symbol}")
                     except Exception as e:
                         print(f"Error al cerrar posición o abrir nueva: {e}")
+                        send_telegram_message(f"❌ Error al cerrar posición o abrir nueva para {symbol}: {str(e)}")
                         raise HTTPException(status_code=500, detail=str(e))
             print(f"Operación rechazada: Ya hay una operación abierta para {symbol}")
+            send_telegram_message(f"⚠️ Operación rechazada para {symbol}: Ya hay una operación abierta")
             return {"message": f"Operación rechazada: Ya hay una operación abierta para {symbol}"}
         
         deal_ref = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, initial_stop_loss)
         deal_id = get_position_deal_id(cst, x_security_token, symbol, action.upper())
         print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss}, dealId: {deal_id}")
+        send_telegram_message(f"📈 Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss} (dealId: {deal_id})")
         
         open_positions[symbol] = {
             "direction": action.upper(),
@@ -272,6 +296,7 @@ async def webhook(request: Request):
         return {"message": "Orden ejecutada correctamente"}
     except Exception as e:
         print(f"Error en la ejecución: {e}")
+        send_telegram_message(f"❌ Error en la ejecución: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 def authenticate():
@@ -382,6 +407,7 @@ async def update_trailing(request: Request):
                 update_stop_loss(cst, x_security_token, pos["dealId"], trailing_stop)
                 pos["stop_loss"] = trailing_stop
                 print(f"Trailing stop actualizado para {symbol}: {trailing_stop}")
+                send_telegram_message(f"🔄 Trailing stop actualizado para {symbol} (BUY): {trailing_stop}")
         else:  # SELL
             min_price = min(pos["entry_price"], current_price)
             quantity = pos["quantity"]
@@ -393,9 +419,11 @@ async def update_trailing(request: Request):
                 update_stop_loss(cst, x_security_token, pos["dealId"], trailing_stop)
                 pos["stop_loss"] = trailing_stop
                 print(f"Trailing stop actualizado para {symbol}: {trailing_stop}")
+                send_telegram_message(f"🔄 Trailing stop actualizado para {symbol} (SELL): {trailing_stop}")
         
         save_positions(open_positions)  # Guardar estado actualizado
         return {"message": f"Trailing stop actualizado para {symbol}"}
     except Exception as e:
         print(f"Error al actualizar trailing stop: {e}")
+        send_telegram_message(f"❌ Error al actualizar trailing stop para {symbol}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
