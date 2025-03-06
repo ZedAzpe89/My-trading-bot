@@ -119,7 +119,7 @@ def get_position_details(cst: str, x_security_token: str, epic: str):
                 "dealId": position["position"]["dealId"],
                 "direction": position["position"]["direction"],
                 "entry_price": float(position["position"]["level"]),
-                "stop_loss": float(position["position"]["stopLevel"]) if position["position"]["stopLevel"] else None,
+                "stop_loss": float(position["position"].get("stopLevel", None)) if "stopLevel" in position["position"] else None,  # Manejar la falta de stopLevel
                 "quantity": float(position["position"]["size"])
             }
     return None
@@ -133,10 +133,15 @@ def sync_open_positions(cst: str, x_security_token: str):
     synced_positions = {}
     for pos in positions:
         epic = pos["market"]["epic"]
+        try:
+            stop_level = float(pos["position"].get("stopLevel", None)) if "stopLevel" in pos["position"] else None
+        except (KeyError, TypeError):
+            stop_level = None  # Manejar cualquier error al acceder a stopLevel
+            print(f"Advertencia: No se encontró stopLevel para posición en {epic}, usando None")
         synced_positions[epic] = {
             "direction": pos["position"]["direction"],
             "entry_price": float(pos["position"]["level"]),
-            "stop_loss": float(pos["position"]["stopLevel"]) if pos["position"]["stopLevel"] else None,
+            "stop_loss": stop_level,
             "dealId": pos["position"]["dealId"],
             "quantity": float(pos["position"]["size"])
         }
