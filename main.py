@@ -357,8 +357,9 @@ async def webhook(request: Request):
                                 raise Exception(f"No se pudo abrir la nueva orden: aún hay posiciones abiertas para {symbol}")
                         except Exception as e:
                             logger.error(f"Error al abrir nueva posición para {symbol}: {e}")
-                            send_telegram_message(f"❌ Error al abrir nueva posición para {symbol}: {str(e)}")
-                            return {"message": f"Posición cerrada, pero error al abrir nueva orden: {str(e)}")
+                            error_message = f"Posición cerrada, pero error al abrir nueva orden: {str(e)}"
+                            send_telegram_message(f"❌ {error_message}")
+                            return {"message": error_message}
             logger.info(f"Operación rechazada: Ya hay una operación abierta para {symbol}")
             send_telegram_message(f"⚠️ Operación rechazada para {symbol}: Ya hay una operación abierta")
             return {"message": f"Operación rechazada: Ya hay una operación abierta para {symbol}"}
