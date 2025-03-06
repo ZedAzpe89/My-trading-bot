@@ -17,8 +17,8 @@ CUSTOM_PASSWORD = os.getenv("CUSTOM_PASSWORD")
 ACCOUNT_ID = os.getenv("ACCOUNT_ID")
 
 # Configuración de Telegram
-TELEGRAM_TOKEN = "7247126230:AAFBj8M6cca3NHcN6rUr0wDNyTZtu8dq-LQ"  # Reemplaza con el token de tu bot
-TELEGRAM_CHAT_ID = "-4757476521"       # Reemplaza con el chat ID de tu grupo
+TELEGRAM_TOKEN = "tu-telegram-token-aqui"  # Reemplaza con el token de tu bot
+TELEGRAM_CHAT_ID = "tu-chat-id-aqui"       # Reemplaza con el chat ID de tu grupo
 
 open_positions = {}
 
@@ -248,9 +248,20 @@ async def webhook(request: Request):
                 if action == opposite_action:
                     print(f"Intentando cerrar posición para {symbol} con dealId: {pos['dealId']}")
                     try:
+                        # Obtener el precio actual del mercado para calcular ganancias/pérdidas
+                        _, current_bid, current_offer, _, _ = get_market_details(cst, x_security_token, symbol)
+                        exit_price = current_bid if pos["direction"] == "BUY" else current_offer
+                        quantity = pos["quantity"]
+                        leverage = 100.0  # Apalancamiento 100:1
+                        if pos["direction"] == "BUY":
+                            profit_loss = (exit_price - pos["entry_price"]) * quantity / leverage
+                        else:  # SELL
+                            profit_loss = (pos["entry_price"] - exit_price) * quantity / leverage
+                        profit_loss = round(profit_loss, 2)
+
                         close_position(cst, x_security_token, pos["dealId"], symbol, adjusted_quantity)
                         print(f"Posición cerrada para {symbol} por señal opuesta")
-                        send_telegram_message(f"🔒 Posición cerrada para {symbol}: {pos['direction']} a {pos['entry_price']}")
+                        send_telegram_message(f"🔒 Posición cerrada para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia/pérdida: {profit_loss} USD")
                         del open_positions[symbol]
                         
                         # Verificar si hay posiciones abiertas antes de abrir una nueva
