@@ -28,6 +28,7 @@ except json.JSONDecodeError as e:
 
 FOLDER_ID = "1bKPwlyVt8a-EizPOTJYDioFNvaWqKja3"
 FILE_NAME = "last_signal_15m.json"
+POSITIONS_FILE_NAME = "open_positions.json"  # Nuevo archivo para guardar posiciones abiertas
 
 creds = service_account.Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=SCOPES)
 service = build("drive", "v3", credentials=creds)
@@ -68,6 +69,22 @@ def save_signal(data):
 
 def load_signal():
     return download_file(FILE_NAME)
+
+def save_positions(data):
+    with open(POSITIONS_FILE_NAME, "w") as f:
+        json.dump(data, f)
+    upload_file(POSITIONS_FILE_NAME, POSITIONS_FILE_NAME)
+
+def load_positions():
+    return download_file(POSITIONS_FILE_NAME)
+
+# Sincronizar posiciones al iniciar la aplicación
+@app.on_event("startup")
+async def startup_event():
+    global open_positions
+    open_positions = load_positions()
+    cst, x_security_token = authenticate()
+    sync_open_positions(cst, x_security_token)
 
 class Signal(BaseModel):
     action: str
@@ -124,6 +141,7 @@ def sync_open_positions(cst: str, x_security_token: str):
             "quantity": float(pos["position"]["size"])
         }
     
+    global open_positions
     for symbol in list(open_positions.keys()):
         if symbol not in synced_positions and symbol in open_positions:
             print(f"Posición cerrada detectada para {symbol} (probablemente por stop loss o comisiones)")
@@ -144,8 +162,8 @@ def sync_open_positions(cst: str, x_security_token: str):
             }
             del open_positions[symbol]
     
-    open_positions.clear()
-    open_positions.update(synced_positions)
+    open_positions = synced_positions  # Actualizar globalmente
+    save_positions(open_positions)  # Guardar en Google Drive
     print(f"Posiciones sincronizadas: {json.dumps(open_positions, indent=2)}")
 
 def calculate_valid_stop_loss(entry_price, direction, min_stop_distance, max_stop_distance=None):
@@ -222,18 +240,23 @@ async def webhook(request: Request):
                         print(f"Posición cerrada para {symbol} por señal opuesta")
                         del open_positions[symbol]
                         
-                        # Asegurar que la nueva orden se abra con stop loss válido
-                        deal_ref = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, initial_stop_loss)
-                        deal_id = get_position_deal_id(cst, x_security_token, symbol, action.upper())
-                        print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss}, dealId: {deal_id}")
-                        open_positions[symbol] = {
-                            "direction": action.upper(),
-                            "entry_price": entry_price,
-                            "stop_loss": initial_stop_loss,
-                            "dealId": deal_id,
-                            "quantity": adjusted_quantity
-                        }
-                        return {"message": f"Posición cerrada y nueva orden {action.upper()} ejecutada para {symbol}"}
+                        # Verificar si hay posiciones abiertas antes de abrir una nueva
+                        new_active_trades = get_active_trades(cst, x_security_token, symbol)
+                        if new_active_trades["buy"] == 0 and new_active_trades["sell"] == 0:
+                            deal_ref = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, initial_stop_loss)
+                            deal_id = get_position_deal_id(cst, x_security_token, symbol, action.upper())
+                            print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss}, dealId: {deal_id}")
+                            open_positions[symbol] = {
+                                "direction": action.upper(),
+                                "entry_price": entry_price,
+                                "stop_loss": initial_stop_loss,
+                                "dealId": deal_id,
+                                "quantity": adjusted_quantity
+                            }
+                            save_positions(open_positions)  # Guardar estado actualizado
+                            return {"message": f"Posición cerrada y nueva orden {action.upper()} ejecutada para {symbol}"}
+                        else:
+                            raise Exception(f"No se pudo abrir la nueva orden: aún hay posiciones abiertas para {symbol}")
                     except Exception as e:
                         print(f"Error al cerrar posición o abrir nueva: {e}")
                         raise HTTPException(status_code=500, detail=str(e))
@@ -251,6 +274,7 @@ async def webhook(request: Request):
             "dealId": deal_id,
             "quantity": adjusted_quantity
         }
+        save_positions(open_positions)  # Guardar estado actualizado
         
         return {"message": "Orden ejecutada correctamente"}
     except Exception as e:
@@ -369,6 +393,7 @@ async def update_trailing(request: Request):
                 pos["stop_loss"] = trailing_stop
                 print(f"Trailing stop actualizado para {symbol}: {trailing_stop}")
         
+        save_positions(open_positions)  # Guardar estado actualizado
         return {"message": f"Trailing stop actualizado para {symbol}"}
     except Exception as e:
         print(f"Error al actualizar trailing stop: {e}")
