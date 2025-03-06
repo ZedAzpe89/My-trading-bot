@@ -205,7 +205,7 @@ def calculate_valid_stop_loss(entry_price, direction, min_stop_distance, max_sto
     # Cantidad fija de pérdida: $5 USD con quantity=10,000 y apalancamiento=100
     quantity = 10000.0  # Cantidad fija por operación
     leverage = 100.0    # Apalancamiento 100:1
-    loss_amount_usd = 5.0  # Pérdida fija de $5 USD por operación
+    loss_amount_usd = 6.0  # Pérdida fija de $6 USD por operación
     
     # Calcular el cambio en el precio para una pérdida de $5 USD
     price_change = (loss_amount_usd * leverage) / quantity  # Cambio en el precio por $5 USD de pérdida
@@ -469,7 +469,7 @@ async def update_trailing(request: Request):
             max_price = max(pos["entry_price"], current_price)
             quantity = pos["quantity"]
             leverage = 100.0  # Apalancamiento 100:1
-            loss_amount_usd = 5.0  # Pérdida fija de $5 USD por operación
+            loss_amount_usd = 6.0  # Pérdida fija de $6 USD por operación
             price_change = (loss_amount_usd * leverage) / quantity
             trailing_stop = round(max_price - price_change, 5)  # Redondear a 5 decimales
             if trailing_stop > pos["stop_loss"]:
@@ -481,7 +481,7 @@ async def update_trailing(request: Request):
             min_price = min(pos["entry_price"], current_price)
             quantity = pos["quantity"]
             leverage = 100.0  # Apalancamiento 100:1
-            loss_amount_usd = 5.0  # Pérdida fija de $5 USD por operación
+            loss_amount_usd = 6.0  # Pérdida fija de $6 USD por operación
             price_change = (loss_amount_usd * leverage) / quantity
             trailing_stop = round(min_price + price_change, 5)  # Redondear a 5 decimales
             if trailing_stop < pos["stop_loss"]:
