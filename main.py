@@ -147,27 +147,7 @@ def sync_open_positions(cst: str, x_security_token: str):
         }
     
     global open_positions
-    for symbol in list(open_positions.keys()):
-        if symbol not in synced_positions and symbol in open_positions:
-            print(f"Posición cerrada detectada para {symbol} (probablemente por stop loss o comisiones)")
-            min_size, current_bid, current_offer, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
-            adjusted_quantity = open_positions[symbol]["quantity"]
-            entry_price = current_bid if open_positions[symbol]["direction"] == "SELL" else current_offer
-            initial_stop_loss = calculate_valid_stop_loss(entry_price, "BUY" if open_positions[symbol]["direction"] == "SELL" else "SELL", min_stop_distance, max_stop_distance)
-            new_direction = "BUY" if open_positions[symbol]["direction"] == "SELL" else "SELL"
-            deal_ref = place_order(cst, x_security_token, new_direction, symbol, adjusted_quantity, initial_stop_loss)
-            deal_id = get_position_deal_id(cst, x_security_token, symbol, new_direction)
-            print(f"Orden {new_direction} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss}, dealId: {deal_id}")
-            synced_positions[symbol] = {
-                "direction": new_direction,
-                "entry_price": entry_price,
-                "stop_loss": initial_stop_loss,
-                "dealId": deal_id,
-                "quantity": adjusted_quantity
-            }
-            del open_positions[symbol]
-    
-    open_positions = synced_positions  # Actualizar globalmente
+    open_positions = synced_positions  # Actualizar globalmente sin abrir operaciones automáticamente
     save_positions(open_positions)  # Guardar en Google Drive
     print(f"Posiciones sincronizadas: {json.dumps(open_positions, indent=2)}")
 
@@ -180,13 +160,13 @@ def calculate_valid_stop_loss(entry_price, direction, min_stop_distance, max_sto
     if max_stop_distance:
         max_stop_value = entry_price * (max_stop_distance / 100) if isinstance(max_stop_distance, float) else None
     
-    # Cantidad fija de pérdida: $3 USD con quantity=10,000 y apalancamiento=100
+    # Cantidad fija de pérdida: $5 USD con quantity=10,000 y apalancamiento=100 (ajustado para cumplir minStopOrProfitDistance)
     quantity = 10000.0  # Cantidad fija por operación
     leverage = 100.0    # Apalancamiento 100:1
-    loss_amount_usd = 3.0  # Pérdida fija de $3 USD por operación
+    loss_amount_usd = 5.0  # Pérdida fija de $5 USD por operación (ajustado de $3 a $5 para cumplir con minStopOrProfitDistance)
     
-    # Calcular el cambio en el precio para una pérdida de $3 USD
-    price_change = (loss_amount_usd * leverage) / quantity  # Cambio en el precio por $3 USD de pérdida
+    # Calcular el cambio en el precio para una pérdida de $5 USD
+    price_change = (loss_amount_usd * leverage) / quantity  # Cambio en el precio por $5 USD de pérdida
     
     if direction == "BUY":
         stop_loss = round(entry_price - price_change, 5)  # Redondear a 5 decimales
@@ -395,7 +375,7 @@ async def update_trailing(request: Request):
             max_price = max(pos["entry_price"], current_price)
             quantity = pos["quantity"]
             leverage = 100.0  # Apalancamiento 100:1
-            loss_amount_usd = 3.0  # Pérdida fija de $3 USD por operación
+            loss_amount_usd = 5.0  # Pérdida fija de $5 USD por operación
             price_change = (loss_amount_usd * leverage) / quantity
             trailing_stop = round(max_price - price_change, 5)  # Redondear a 5 decimales
             if trailing_stop > pos["stop_loss"]:
@@ -406,7 +386,7 @@ async def update_trailing(request: Request):
             min_price = min(pos["entry_price"], current_price)
             quantity = pos["quantity"]
             leverage = 100.0  # Apalancamiento 100:1
-            loss_amount_usd = 3.0  # Pérdida fija de $3 USD por operación
+            loss_amount_usd = 5.0  # Pérdida fija de $5 USD por operación
             price_change = (loss_amount_usd * leverage) / quantity
             trailing_stop = round(min_price + price_change, 5)  # Redondear a 5 decimales
             if trailing_stop < pos["stop_loss"]:
