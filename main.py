@@ -270,6 +270,7 @@ async def webhook(request: Request):
                 opposite_action = "sell" if pos["direction"] == "BUY" else "buy"
                 if action == opposite_action:
                     print(f"Intentando cerrar posición para {symbol} con dealId: {pos['dealId']}")
+                    profit_loss = 0.0  # Valor por defecto en caso de error
                     try:
                         # Cerrar la posición y obtener el dealReference del cierre
                         deal_ref = close_position(cst, x_security_token, pos["dealId"], symbol, adjusted_quantity)
@@ -279,6 +280,7 @@ async def webhook(request: Request):
                             # Usar el campo 'profit' directamente si está disponible
                             if "profit" in confirmation and confirmation["profit"] is not None:
                                 profit_loss = float(confirmation["profit"])
+                                print(f"Profit/loss obtenido de /confirms: {profit_loss} USD")
                             else:
                                 # Si no está disponible, calcular manualmente ajustando por spread dinámico
                                 exit_price = float(confirmation.get("level", 0.0))  # Precio de cierre exacto
@@ -289,13 +291,14 @@ async def webhook(request: Request):
                                 # Ajustar el precio de entrada por el spread inicial (almacenado o estimado)
                                 spread_at_open = pos.get("spread_at_open", spread)  # Usar spread al abrir si está almacenado
                                 if pos["direction"] == "BUY":
-                                    adjusted_entry_price = pos["entry_price"] + spread_at_open
-                                    adjusted_exit_price = exit_price - close_spread
+                                    adjusted_entry_price = pos["entry_price"]  # Usar precio sin ajuste adicional
+                                    adjusted_exit_price = exit_price
                                     profit_loss = (adjusted_exit_price - adjusted_entry_price) * quantity / leverage
                                 else:  # SELL
-                                    adjusted_entry_price = pos["entry_price"] - spread_at_open
-                                    adjusted_exit_price = exit_price + close_spread
+                                    adjusted_entry_price = pos["entry_price"]
+                                    adjusted_exit_price = exit_price
                                     profit_loss = (adjusted_entry_price - adjusted_exit_price) * quantity / leverage
+                                print(f"Profit/loss calculado manualmente: entry_price={adjusted_entry_price}, exit_price={adjusted_exit_price}, profit_loss={profit_loss} USD")
                         except Exception as e:
                             print(f"Error al obtener confirmación de cierre: {e}, usando precio actual como respaldo")
                             # Usar el precio actual como respaldo si la confirmación falla
@@ -305,43 +308,55 @@ async def webhook(request: Request):
                             leverage = 100.0  # Apalancamiento 100:1
                             spread_at_open = pos.get("spread_at_open", spread)  # Usar spread al abrir si está almacenado
                             if pos["direction"] == "BUY":
-                                adjusted_entry_price = pos["entry_price"] + spread_at_open
-                                adjusted_exit_price = exit_price - close_spread
+                                adjusted_entry_price = pos["entry_price"]
+                                adjusted_exit_price = exit_price
                                 profit_loss = (adjusted_exit_price - adjusted_entry_price) * quantity / leverage
                             else:  # SELL
-                                adjusted_entry_price = pos["entry_price"] - spread_at_open
-                                adjusted_exit_price = exit_price + close_spread
+                                adjusted_entry_price = pos["entry_price"]
+                                adjusted_exit_price = exit_price
                                 profit_loss = (adjusted_entry_price - adjusted_exit_price) * quantity / leverage
+                            print(f"Profit/loss calculado con precio actual: entry_price={adjusted_entry_price}, exit_price={adjusted_exit_price}, profit_loss={profit_loss} USD")
                         
                         profit_loss = round(profit_loss, 2)
-
-                        print(f"Posición cerrada para {symbol} por señal opuesta")
-                        send_telegram_message(f"🔒 Posición cerrada para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia/pérdida: {'$' + str(profit_loss) if profit_loss >= 0 else '-$' + str(abs(profit_loss))} USD")
-                        del open_positions[symbol]
-                        
-                        # Verificar si hay posiciones abiertas antes de abrir una nueva
-                        new_active_trades = get_active_trades(cst, x_security_token, symbol)
-                        if new_active_trades["buy"] == 0 and new_active_trades["sell"] == 0:
-                            deal_ref = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, initial_stop_loss)
-                            deal_id = get_position_deal_id(cst, x_security_token, symbol, action.upper())
-                            print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss}, dealId: {deal_id}")
-                            send_telegram_message(f"📈 Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss} (dealId: {deal_id})")
-                            open_positions[symbol] = {
-                                "direction": action.upper(),
-                                "entry_price": entry_price,
-                                "stop_loss": initial_stop_loss,
-                                "dealId": deal_id,
-                                "quantity": adjusted_quantity,
-                                "spread_at_open": spread  # Almacenar spread al abrir
-                            }
-                            save_positions(open_positions)  # Guardar estado actualizado
-                            return {"message": f"Posición cerrada y nueva orden {action.upper()} ejecutada para {symbol}"}
-                        else:
-                            raise Exception(f"No se pudo abrir la nueva orden: aún hay posiciones abiertas para {symbol}")
+                        # Enviar mensaje de ganancias/pérdidas siempre
+                        profit_loss_message = f"+${profit_loss} USD" if profit_loss >= 0 else f"-${abs(profit_loss)} USD"
+                        send_telegram_message(f"🔒 Posición cerrada para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia/pérdida: {profit_loss_message}")
+                        print(f"Posición cerrada para {symbol} por señal opuesta, profit_loss: {profit_loss} USD")
                     except Exception as e:
-                        print(f"Error al cerrar posición o abrir nueva: {e}")
-                        send_telegram_message(f"❌ Error al cerrar posición o abrir nueva para {symbol}: {str(e)}")
+                        print(f"Error al cerrar posición: {e}")
+                        # Enviar mensaje incluso si hay error en el cálculo
+                        send_telegram_message(f"🔒 Posición cerrada para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia/pérdida no calculada debido a error: {str(e)}")
                         raise HTTPException(status_code=500, detail=str(e))
+                    finally:
+                        # Asegurarse de eliminar la posición cerrada
+                        if symbol in open_positions:
+                            del open_positions[symbol]
+                        
+                        # Intentar abrir una nueva posición
+                        try:
+                            # Verificar si hay posiciones abiertas antes de abrir una nueva
+                            new_active_trades = get_active_trades(cst, x_security_token, symbol)
+                            if new_active_trades["buy"] == 0 and new_active_trades["sell"] == 0:
+                                deal_ref = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, initial_stop_loss)
+                                deal_id = get_position_deal_id(cst, x_security_token, symbol, action.upper())
+                                print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss}, dealId: {deal_id}")
+                                send_telegram_message(f"📈 Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss} (dealId: {deal_id})")
+                                open_positions[symbol] = {
+                                    "direction": action.upper(),
+                                    "entry_price": entry_price,
+                                    "stop_loss": initial_stop_loss,
+                                    "dealId": deal_id,
+                                    "quantity": adjusted_quantity,
+                                    "spread_at_open": spread  # Almacenar spread al abrir
+                                }
+                                save_positions(open_positions)  # Guardar estado actualizado
+                                return {"message": f"Posición cerrada y nueva orden {action.upper()} ejecutada para {symbol}"}
+                            else:
+                                raise Exception(f"No se pudo abrir la nueva orden: aún hay posiciones abiertas para {symbol}")
+                        except Exception as e:
+                            print(f"Error al abrir nueva posición para {symbol}: {e}")
+                            send_telegram_message(f"❌ Error al abrir nueva posición para {symbol}: {str(e)}")
+                            return {"message": f"Posición cerrada, pero error al abrir nueva orden: {str(e)}"}
             print(f"Operación rechazada: Ya hay una operación abierta para {symbol}")
             send_telegram_message(f"⚠️ Operación rechazada para {symbol}: Ya hay una operación abierta")
             return {"message": f"Operación rechazada: Ya hay una operación abierta para {symbol}"}
