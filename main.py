@@ -8,8 +8,14 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 from io import BytesIO
 import time
+import asyncio
+import logging
 
 app = FastAPI()
+
+# Configuración de logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 CAPITAL_API_URL = "https://demo-api-capital.backend-capital.com/api/v1"
 API_KEY = os.getenv("API_KEY")
@@ -32,24 +38,20 @@ except json.JSONDecodeError as e:
 
 FOLDER_ID = "1bKPwlyVt8a-EizPOTJYDioFNvaWqKja3"
 FILE_NAME = "last_signal_15m.json"
-POSITIONS_FILE_NAME = "open_positions.json"  # Nuevo archivo para guardar posiciones abiertas
+POSITIONS_FILE_NAME = "open_positions.json"
 
 creds = service_account.Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=SCOPES)
 service = build("drive", "v3", credentials=creds)
 
 def send_telegram_message(message):
-    """Envía un mensaje a Telegram."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message
-    }
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     try:
         response = requests.post(url, json=payload)
         if response.status_code != 200:
-            print(f"Error al enviar mensaje a Telegram: {response.text}")
+            logger.error(f"Error al enviar mensaje a Telegram: {response.text}")
     except Exception as e:
-        print(f"Error al enviar mensaje a Telegram: {str(e)}")
+        logger.error(f"Error al enviar mensaje a Telegram: {str(e)}")
 
 def upload_file(file_path, file_name):
     query = f"name='{file_name}' and '{FOLDER_ID}' in parents"
@@ -96,7 +98,6 @@ def save_positions(data):
 def load_positions():
     return download_file(POSITIONS_FILE_NAME)
 
-# Sincronizar posiciones al iniciar la aplicación
 @app.on_event("startup")
 async def startup_event():
     global open_positions
@@ -111,7 +112,15 @@ class Signal(BaseModel):
     quantity: float = 10000.0
     source: str = "rsi"
     timeframe: str = "1m"
-    loss_amount_usd: float = 10.0  # Cambiado a -10 USD como solicitado
+    loss_amount_usd: float = 10.0
+
+def authenticate():
+    headers = {"X-CAP-API-KEY": API_KEY, "Content-Type": "application/json"}
+    payload = {"identifier": ACCOUNT_ID, "password": CUSTOM_PASSWORD}
+    response = requests.post(f"{CAPITAL_API_URL}/session", headers=headers, json=payload)
+    if response.status_code != 200:
+        raise Exception(f"Error de autenticación: {response.text}")
+    return response.headers.get("CST"), response.headers.get("X-SECURITY-TOKEN")
 
 def get_market_details(cst: str, x_security_token: str, epic: str):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
@@ -119,12 +128,12 @@ def get_market_details(cst: str, x_security_token: str, epic: str):
     if response.status_code != 200:
         raise Exception(f"Error al obtener detalles del mercado: {response.text}")
     details = response.json()
-    print(f"Respuesta completa de /markets/{epic}: {json.dumps(details, indent=2)}")
+    logger.info(f"Respuesta completa de /markets/{epic}: {json.dumps(details, indent=2)}")
     min_size = details["dealingRules"]["minDealSize"]["value"]
     current_bid = details["snapshot"]["bid"]
     current_offer = details["snapshot"]["offer"]
-    spread = current_offer - current_bid  # Calcular spread dinámico
-    min_stop_distance = details["dealingRules"]["minStopOrProfitDistance"]["value"] if "minStopOrProfitDistance" in details["dealingRules"] else 0.01  # Valor por defecto 0.01%
+    spread = current_offer - current_bid
+    min_stop_distance = details["dealingRules"]["minStopOrProfitDistance"]["value"] if "minStopOrProfitDistance" in details["dealingRules"] else 0.01
     max_stop_distance = details["dealingRules"]["maxStopOrProfitDistance"]["value"] if "maxStopOrProfitDistance" in details["dealingRules"] else None
     return min_size, current_bid, current_offer, spread, min_stop_distance, max_stop_distance
 
@@ -146,29 +155,26 @@ def get_position_details(cst: str, x_security_token: str, epic: str):
     return None
 
 def get_deal_confirmation(cst: str, x_security_token: str, deal_reference: str, retries=3, delay=1):
-    """Obtiene los detalles de la confirmación de una operación cerrada con reintentos."""
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
     for attempt in range(retries):
         response = requests.get(f"{CAPITAL_API_URL}/confirms/{deal_reference}", headers=headers)
         if response.status_code == 200:
             confirmation = response.json()
-            print(f"Respuesta de /confirms/{deal_reference}: {json.dumps(confirmation, indent=2)}")
-            # Verificar si el campo 'profit' o 'level' está presente y es válido
+            logger.info(f"Respuesta de /confirms/{deal_reference}: {json.dumps(confirmation, indent=2)}")
             if "profit" in confirmation and confirmation["profit"] is not None:
                 return confirmation
             elif "level" in confirmation and confirmation["level"] is not None:
                 return confirmation
             else:
-                print(f"Advertencia: Campos 'profit' o 'level' no encontrados en la confirmación (intento {attempt + 1}/{retries})")
+                logger.warning(f"Advertencia: Campos 'profit' o 'level' no encontrados en la confirmación (intento {attempt + 1}/{retries})")
         else:
-            print(f"Error al obtener confirmación (intento {attempt + 1}/{retries}): {response.text}")
-        # Esperar antes de reintentar
+            logger.error(f"Error al obtener confirmación (intento {attempt + 1}/{retries}): {response.text}")
         if attempt < retries - 1:
             time.sleep(delay)
     raise Exception(f"No se pudo obtener la confirmación después de {retries} intentos")
 
 def sync_open_positions(cst: str, x_security_token: str):
-    global open_positions  # Declarar como global al inicio
+    global open_positions
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
     response = requests.get(f"{CAPITAL_API_URL}/positions", headers=headers)
     if response.status_code != 200:
@@ -180,8 +186,8 @@ def sync_open_positions(cst: str, x_security_token: str):
         try:
             stop_level = float(pos["position"].get("stopLevel", None)) if "stopLevel" in pos["position"] else None
         except (KeyError, TypeError):
-            stop_level = None  # Manejar cualquier error al acceder a stopLevel
-            print(f"Advertencia: No se encontró stopLevel para posición en {epic}, usando None")
+            stop_level = None
+            logger.warning(f"Advertencia: No se encontró stopLevel para posición en {epic}, usando None")
         synced_positions[epic] = {
             "direction": pos["position"]["direction"],
             "entry_price": float(pos["position"]["level"]),
@@ -190,100 +196,95 @@ def sync_open_positions(cst: str, x_security_token: str):
             "quantity": float(pos["position"]["size"])
         }
     
-    # Detectar cierres por stop loss comparando con open_positions
     closed_positions = {k: v for k, v in open_positions.items() if k not in synced_positions}
     for symbol, pos in closed_positions.items():
         if pos["stop_loss"] and (pos["direction"] == "BUY" and pos["stop_loss"] >= pos["entry_price"]) or (pos["direction"] == "SELL" and pos["stop_loss"] <= pos["entry_price"]):
-            # Asumir que se cerró por stop loss
             profit_loss = calculate_profit_loss_from_stop_loss(pos)
             profit_loss_message = f"+${profit_loss} USD" if profit_loss >= 0 else f"-${abs(profit_loss)} USD"
             send_telegram_message(f"🔒 Posición cerrada por stop loss para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia/pérdida: {profit_loss_message}")
-            print(f"Posición cerrada por stop loss para {symbol}, profit_loss: {profit_loss} USD")
+            logger.info(f"Posición cerrada por stop loss para {symbol}, profit_loss: {profit_loss} USD")
     
-    open_positions = synced_positions  # Actualizar globalmente
-    save_positions(open_positions)  # Guardar en Google Drive
-    print(f"Posiciones sincronizadas: {json.dumps(open_positions, indent=2)}")
+    open_positions = synced_positions
+    save_positions(open_positions)
+    logger.info(f"Posiciones sincronizadas: {json.dumps(open_positions, indent=2)}")
 
 def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity, leverage, min_stop_distance, max_stop_distance=None):
-    # Redondear entry_price a 5 decimales para USDMXN/EURUSD
     entry_price = round(entry_price, 5)
     if min_stop_distance <= 0:
-        min_stop_distance = 0.01  # Valor por defecto 0.01%
-    min_stop_value = entry_price * (min_stop_distance / 100) if isinstance(min_stop_distance, float) else 0.01  # Convertir % a valor absoluto
+        min_stop_distance = 0.01
+    min_stop_value = entry_price * (min_stop_distance / 100) if isinstance(min_stop_distance, float) else 0.01
     if max_stop_distance:
         max_stop_value = entry_price * (max_stop_distance / 100) if isinstance(max_stop_distance, float) else None
     
-    # Calcular el cambio en el precio para la pérdida especificada
-    price_change = (loss_amount_usd * leverage) / quantity  # Cambio en el precio para la pérdida dada
-    
-    # Añadir un margen adicional (e.g., 1.5x la distancia mínima) para manejar volatilidad
-    safety_margin = min_stop_value * 1.5  # Aumentar la distancia mínima en un 50%
-    effective_price_change = max(price_change, safety_margin)  # Usar el mayor entre price_change y safety_margin
+    price_change = (loss_amount_usd * leverage) / quantity
+    safety_margin = min_stop_value * 1.5
+    effective_price_change = max(price_change, safety_margin)
     
     if direction == "BUY":
-        stop_loss = round(entry_price - effective_price_change, 5)  # Redondear a 5 decimales
-        # Asegurar que el stop loss cumpla con la distancia mínima
-        final_stop = max(stop_loss, round(entry_price - min_stop_value * 2, 5))  # Doblar la distancia mínima como margen
+        stop_loss = round(entry_price - effective_price_change, 5)
+        final_stop = max(stop_loss, round(entry_price - min_stop_value * 2, 5))
         if max_stop_distance and final_stop < (entry_price - round(entry_price * (max_stop_distance / 100), 5)):
-            final_stop = entry_price - round(entry_price * (max_stop_distance / 100), 5)  # Asegurar distancia máxima
-        print(f"Stop Loss para BUY calculado: {final_stop}, entry_price: {entry_price}, loss_amount_usd: {loss_amount_usd}, price_change: {price_change}, effective_price_change: {effective_price_change}, min_stop: {min_stop_value}, max_stop: {max_stop_value}, safety_margin: {safety_margin}")
+            final_stop = entry_price - round(entry_price * (max_stop_distance / 100), 5)
+        logger.info(f"Stop Loss para BUY calculado: {final_stop}, entry_price: {entry_price}, loss_amount_usd: {loss_amount_usd}, price_change: {price_change}, effective_price_change: {effective_price_change}, min_stop: {min_stop_value}, max_stop: {max_stop_value}, safety_margin: {safety_margin}")
         return final_stop
     else:
-        stop_loss = round(entry_price + effective_price_change, 5)  # Redondear a 5 decimales
-        # Asegurar que el stop loss cumpla con la distancia mínima
-        final_stop = min(stop_loss, round(entry_price + min_stop_value * 2, 5))  # Doblar la distancia mínima como margen
+        stop_loss = round(entry_price + effective_price_change, 5)
+        final_stop = min(stop_loss, round(entry_price + min_stop_value * 2, 5))
         if max_stop_distance and final_stop > (entry_price + round(entry_price * (max_stop_distance / 100), 5)):
-            final_stop = entry_price + round(entry_price * (max_stop_distance / 100), 5)  # Asegurar distancia máxima
-        print(f"Stop Loss para SELL calculado: {final_stop}, entry_price: {entry_price}, loss_amount_usd: {loss_amount_usd}, price_change: {price_change}, effective_price_change: {effective_price_change}, min_stop: {min_stop_value}, max_stop: {max_stop_value}, safety_margin: {safety_margin}")
+            final_stop = entry_price + round(entry_price * (max_stop_distance / 100), 5)
+        logger.info(f"Stop Loss para SELL calculado: {final_stop}, entry_price: {entry_price}, loss_amount_usd: {loss_amount_usd}, price_change: {price_change}, effective_price_change: {effective_price_change}, min_stop: {min_stop_value}, max_stop: {max_stop_value}, safety_margin: {safety_margin}")
         return final_stop
 
 def calculate_profit_loss_from_stop_loss(pos):
-    """Calcula la ganancia/pérdida aproximada cuando se cierra por stop loss."""
     entry_price = pos["entry_price"]
     stop_loss = pos["stop_loss"]
     quantity = pos["quantity"]
-    leverage = 100.0  # Apalancamiento 100:1
+    leverage = 100.0
     if pos["direction"] == "BUY":
         profit_loss = (stop_loss - entry_price) * quantity / leverage
-    else:  # SELL
+    else:
         profit_loss = (entry_price - stop_loss) * quantity / leverage
     return round(profit_loss, 2)
+
+def convert_profit_to_usd(profit, symbol, current_bid):
+    """Convierte la ganancia/pérdida a USD según el par de divisas."""
+    if symbol == "USDMXN" and isinstance(profit, (int, float)):
+        return round(profit / current_bid, 2)  # Convierte MXN a USD usando el bid actual
+    return round(profit, 2)  # Asume USD por defecto
 
 @app.post("/webhook")
 async def webhook(request: Request):
     data = await request.json()
-    print("Datos crudos recibidos:", data)
+    logger.info("Datos crudos recibidos: %s", data)
     
     try:
         signal = Signal(**data)
-        print("Datos recibidos y parseados:", signal.dict())
+        logger.info("Datos recibidos y parseados: %s", signal.dict())
         
         action, symbol, quantity, source, timeframe, loss_amount_usd = signal.action.lower(), signal.symbol, signal.quantity, signal.source, signal.timeframe, signal.loss_amount_usd
         last_signal_15m = load_signal()
-        print(f"Última señal de 15m cargada: {last_signal_15m}")
+        logger.info(f"Última señal de 15m cargada: {last_signal_15m}")
         
         if timeframe == "15m":
-            print(f"Actualizando última señal de 15m para {symbol}: {action}")
             last_signal_15m[symbol] = action
             save_signal(last_signal_15m)
             return {"message": f"Última señal de 15m registrada para {symbol}: {action}"}
         
         cst, x_security_token = authenticate()
-        print("Autenticación exitosa en Capital.com")
+        logger.info("Autenticación exitosa en Capital.com")
         
         sync_open_positions(cst, x_security_token)
         
         min_size, current_bid, current_offer, spread, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
         adjusted_quantity = max(quantity, min_size)
         if adjusted_quantity != quantity:
-            print(f"Ajustando quantity de {quantity} a {adjusted_quantity} para cumplir con el tamaño mínimo")
+            logger.info(f"Ajustando quantity de {quantity} a {adjusted_quantity} para cumplir con el tamaño mínimo")
         
         entry_price = current_bid if action == "buy" else current_offer
-        # Redondear entry_price a 5 decimales
         entry_price = round(entry_price, 5)
         initial_stop_loss = calculate_valid_stop_loss(entry_price, action.upper(), loss_amount_usd, adjusted_quantity, 100.0, min_stop_distance, max_stop_distance)
         
-        print(f"Stop Loss calculado: {initial_stop_loss} para entrada a {entry_price}")
+        logger.info(f"Stop Loss calculado: {initial_stop_loss} para entrada a {entry_price}")
         
         active_trades = get_active_trades(cst, x_security_token, symbol)
         if active_trades["buy"] > 0 or active_trades["sell"] > 0:
@@ -291,64 +292,56 @@ async def webhook(request: Request):
                 pos = open_positions[symbol]
                 opposite_action = "sell" if pos["direction"] == "BUY" else "buy"
                 if action == opposite_action:
-                    print(f"Intentando cerrar posición para {symbol} con dealId: {pos['dealId']}")
-                    profit_loss = 0.0  # Valor por defecto en caso de error
+                    logger.info(f"Intentando cerrar posición para {symbol} con dealId: {pos['dealId']}")
+                    profit_loss = 0.0
                     try:
-                        # Cerrar la posición y obtener el dealReference del cierre
                         deal_ref = close_position(cst, x_security_token, pos["dealId"], symbol, adjusted_quantity)
-                        # Obtener el precio de cierre exacto desde la confirmación de la operación
                         try:
                             confirmation = get_deal_confirmation(cst, x_security_token, deal_ref)
-                            # Usar el campo 'profit' directamente si está disponible
                             if "profit" in confirmation and confirmation["profit"] is not None:
                                 profit_loss = float(confirmation["profit"])
-                                print(f"Profit/loss obtenido de /confirms: {profit_loss} USD")
+                                profit_loss_usd = convert_profit_to_usd(profit_loss, symbol, current_bid)
+                                logger.info(f"Profit/loss obtenido de /confirms: {profit_loss} {confirmation.get('profitCurrency', 'USD')}, convertido a {profit_loss_usd} USD")
                             else:
-                                # Si no está disponible, usar el precio actual como respaldo
-                                _, current_bid, current_offer, close_spread, _, _ = get_market_details(cst, x_security_token, symbol)
-                                exit_price = current_bid if pos["direction"] == "BUY" else current_offer
+                                exit_price = float(confirmation.get("level", current_bid if pos["direction"] == "BUY" else current_offer))
                                 quantity = pos["quantity"]
-                                leverage = 100.0  # Apalancamiento 100:1
+                                leverage = 100.0
                                 if pos["direction"] == "BUY":
                                     profit_loss = (exit_price - pos["entry_price"]) * quantity / leverage
-                                else:  # SELL
+                                else:
                                     profit_loss = (pos["entry_price"] - exit_price) * quantity / leverage
-                                print(f"Profit/loss calculado con precio actual: entry_price={pos['entry_price']}, exit_price={exit_price}, profit_loss={profit_loss} USD")
+                                profit_loss_usd = convert_profit_to_usd(profit_loss, symbol, current_bid)
+                                logger.info(f"Profit/loss calculado con precio actual: entry_price={pos['entry_price']}, exit_price={exit_price}, profit_loss={profit_loss_usd} USD")
                         except Exception as e:
-                            print(f"Error al obtener confirmación de cierre: {e}, usando precio actual como respaldo")
-                            _, current_bid, current_offer, close_spread, _, _ = get_market_details(cst, x_security_token, symbol)
+                            logger.error(f"Error al obtener confirmación de cierre: {e}, usando precio actual como respaldo")
                             exit_price = current_bid if pos["direction"] == "BUY" else current_offer
                             quantity = pos["quantity"]
-                            leverage = 100.0  # Apalancamiento 100:1
+                            leverage = 100.0
                             if pos["direction"] == "BUY":
                                 profit_loss = (exit_price - pos["entry_price"]) * quantity / leverage
-                            else:  # SELL
+                            else:
                                 profit_loss = (pos["entry_price"] - exit_price) * quantity / leverage
-                            print(f"Profit/loss calculado con precio actual: entry_price={pos['entry_price']}, exit_price={exit_price}, profit_loss={profit_loss} USD")
+                            profit_loss_usd = convert_profit_to_usd(profit_loss, symbol, current_bid)
+                            logger.info(f"Profit/loss calculado con precio actual: entry_price={pos['entry_price']}, exit_price={exit_price}, profit_loss={profit_loss_usd} USD")
                         
-                        profit_loss = round(profit_loss, 2)
-                        # Enviar mensaje de ganancias/pérdidas siempre
-                        profit_loss_message = f"+${profit_loss} USD" if profit_loss >= 0 else f"-${abs(profit_loss)} USD"
+                        profit_loss_usd = round(profit_loss_usd, 2)
+                        profit_loss_message = f"+${profit_loss_usd} USD" if profit_loss_usd >= 0 else f"-${abs(profit_loss_usd)} USD"
                         send_telegram_message(f"🔒 Posición cerrada para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia/pérdida: {profit_loss_message}")
-                        print(f"Posición cerrada para {symbol} por señal opuesta, profit_loss: {profit_loss} USD")
+                        logger.info(f"Posición cerrada para {symbol} por señal opuesta, profit_loss: {profit_loss_usd} USD")
                     except Exception as e:
-                        print(f"Error al cerrar posición: {e}")
-                        # Enviar mensaje incluso si hay error en el cálculo
+                        logger.error(f"Error al cerrar posición: {e}")
                         send_telegram_message(f"🔒 Posición cerrada para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia/pérdida no calculada debido a error: {str(e)}")
                         raise HTTPException(status_code=500, detail=str(e))
                     finally:
-                        # Asegurarse de eliminar la posición cerrada
                         if symbol in open_positions:
                             del open_positions[symbol]
                         
-                        # Intentar abrir una nueva posición
                         try:
-                            # Verificar si hay posiciones abiertas antes de abrir una nueva
                             new_active_trades = get_active_trades(cst, x_security_token, symbol)
                             if new_active_trades["buy"] == 0 and new_active_trades["sell"] == 0:
                                 deal_ref = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, initial_stop_loss)
                                 deal_id = get_position_deal_id(cst, x_security_token, symbol, action.upper())
-                                print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss}, dealId: {deal_id}")
+                                logger.info(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss}, dealId: {deal_id}")
                                 send_telegram_message(f"📈 Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss} (dealId: {deal_id})")
                                 open_positions[symbol] = {
                                     "direction": action.upper(),
@@ -356,23 +349,23 @@ async def webhook(request: Request):
                                     "stop_loss": initial_stop_loss,
                                     "dealId": deal_id,
                                     "quantity": adjusted_quantity,
-                                    "spread_at_open": spread  # Almacenar spread al abrir
+                                    "spread_at_open": spread
                                 }
-                                save_positions(open_positions)  # Guardar estado actualizado
+                                save_positions(open_positions)
                                 return {"message": f"Posición cerrada y nueva orden {action.upper()} ejecutada para {symbol}"}
                             else:
                                 raise Exception(f"No se pudo abrir la nueva orden: aún hay posiciones abiertas para {symbol}")
                         except Exception as e:
-                            print(f"Error al abrir nueva posición para {symbol}: {e}")
+                            logger.error(f"Error al abrir nueva posición para {symbol}: {e}")
                             send_telegram_message(f"❌ Error al abrir nueva posición para {symbol}: {str(e)}")
                             return {"message": f"Posición cerrada, pero error al abrir nueva orden: {str(e)}"}
-            print(f"Operación rechazada: Ya hay una operación abierta para {symbol}")
+            logger.info(f"Operación rechazada: Ya hay una operación abierta para {symbol}")
             send_telegram_message(f"⚠️ Operación rechazada para {symbol}: Ya hay una operación abierta")
             return {"message": f"Operación rechazada: Ya hay una operación abierta para {symbol}"}
         
         deal_ref = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, initial_stop_loss)
         deal_id = get_position_deal_id(cst, x_security_token, symbol, action.upper())
-        print(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss}, dealId: {deal_id}")
+        logger.info(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss}, dealId: {deal_id}")
         send_telegram_message(f"📈 Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss} (dealId: {deal_id})")
         
         open_positions[symbol] = {
@@ -381,23 +374,15 @@ async def webhook(request: Request):
             "stop_loss": initial_stop_loss,
             "dealId": deal_id,
             "quantity": adjusted_quantity,
-            "spread_at_open": spread  # Almacenar spread al abrir
+            "spread_at_open": spread
         }
-        save_positions(open_positions)  # Guardar estado actualizado
+        save_positions(open_positions)
         
         return {"message": "Orden ejecutada correctamente"}
     except Exception as e:
-        print(f"Error en la ejecución: {e}")
+        logger.error(f"Error en la ejecución: {e}")
         send_telegram_message(f"❌ Error en la ejecución: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
-def authenticate():
-    headers = {"X-CAP-API-KEY": API_KEY, "Content-Type": "application/json"}
-    payload = {"identifier": ACCOUNT_ID, "password": CUSTOM_PASSWORD}
-    response = requests.post(f"{CAPITAL_API_URL}/session", headers=headers, json=payload)
-    if response.status_code != 200:
-        raise Exception(f"Error de autenticación: {response.text}")
-    return response.headers.get("CST"), response.headers.get("X-SECURITY-TOKEN")
 
 def get_active_trades(cst: str, x_security_token: str, symbol: str):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
@@ -423,36 +408,28 @@ def get_position_deal_id(cst: str, x_security_token: str, epic: str, direction: 
 
 def place_order(cst: str, x_security_token: str, direction: str, epic: str, size: float, stop_loss: float = None):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token, "Content-Type": "application/json"}
-    payload = {
-        "epic": epic,
-        "direction": direction,
-        "size": size,
-        "type": "MARKET",
-        "currencyCode": "USD"
-    }
+    payload = {"epic": epic, "direction": direction, "size": size, "type": "MARKET", "currencyCode": "USD"}
     if stop_loss is not None:
         if not isinstance(stop_loss, (int, float)) or stop_loss <= 0:
-            print(f"Advertencia: stop_loss inválido ({stop_loss}), omitiendo stopLevel")
+            logger.warning(f"Advertencia: stop_loss inválido ({stop_loss}), omitiendo stopLevel")
         else:
-            # Asegurar exactamente 5 decimales para USDMXN/EURUSD y verificar límites
             payload["stopLevel"] = round(stop_loss, 5)
-            print(f"Enviando stopLevel: {payload['stopLevel']} para {epic}")
+            logger.info(f"Enviando stopLevel: {payload['stopLevel']} para {epic}")
     
-    # Intentar enviar la orden con depuración
     try:
         response = requests.post(f"{CAPITAL_API_URL}/positions", headers=headers, json=payload, timeout=10)
         if response.status_code != 200:
             error_msg = response.text
-            print(f"Error en place_order con stopLevel: {error_msg}")
+            logger.error(f"Error en place_order con stopLevel: {error_msg}")
             raise Exception(f"Error al ejecutar la orden: {error_msg}")
     except Exception as e:
         raise Exception(f"Error al ejecutar la orden: {str(e)}")
     
     response_json = response.json()
-    print(f"Respuesta completa de place_order: {json.dumps(response_json, indent=2)}")
+    logger.info(f"Respuesta completa de place_order: {json.dumps(response_json, indent=2)}")
     deal_key = "dealReference" if "dealReference" in response_json else "dealId"
     if deal_key not in response_json:
-        print(f"Respuesta inesperada: {response_json}")
+        logger.error(f"Respuesta inesperada: {response_json}")
         raise Exception(f"No se encontró '{deal_key}' en la respuesta: {response_json}")
     return response_json[deal_key]
 
@@ -462,21 +439,67 @@ def close_position(cst: str, x_security_token: str, deal_id: str, epic: str, siz
         response = requests.delete(f"{CAPITAL_API_URL}/positions/{deal_id}", headers=headers, timeout=10)
         if response.status_code != 200:
             error_msg = response.text
-            print(f"Error en close_position: {error_msg}")
+            logger.error(f"Error en close_position: {error_msg}")
             raise Exception(f"Error al cerrar posición: {error_msg}")
         response_json = response.json()
         deal_ref = response_json.get("dealReference")
-        print(f"Posición cerrada exitosamente para dealId: {deal_id}")
-        return deal_ref  # Devolver el dealReference para obtener la confirmación
+        logger.info(f"Posición cerrada exitosamente para dealId: {deal_id}")
+        return deal_ref
     except Exception as e:
         raise Exception(f"Error al cerrar posición: {str(e)}")
 
 def update_stop_loss(cst: str, x_security_token: str, deal_id: str, new_stop_loss: float):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token, "Content-Type": "application/json"}
-    payload = {"stopLevel": round(new_stop_loss, 5)}  # Redondear a 5 decimales
+    payload = {"stopLevel": round(new_stop_loss, 5)}
     response = requests.put(f"{CAPITAL_API_URL}/positions/{deal_id}", headers=headers, json=payload)
     if response.status_code != 200:
         raise Exception(f"Error al actualizar stop loss: {response.text}")
+
+async def monitor_trailing_stop():
+    """Monitorea los precios y ajusta el trailing stop en tiempo real."""
+    while True:
+        try:
+            cst, x_security_token = authenticate()
+            for symbol, pos in open_positions.items():
+                min_size, current_bid, current_offer, spread, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
+                quantity = pos["quantity"]
+                leverage = 100.0
+                loss_amount_usd = 10.0
+
+                if pos["direction"] == "BUY":
+                    max_price = max(pos["entry_price"], current_bid)
+                    price_change = (loss_amount_usd * leverage) / quantity
+                    trailing_stop = round(max_price - price_change, 5)
+                    if trailing_stop > pos["stop_loss"]:
+                        update_stop_loss(cst, x_security_token, pos["dealId"], trailing_stop)
+                        pos["stop_loss"] = trailing_stop
+                        logger.info(f"Trailing stop actualizado para {symbol} (BUY): {trailing_stop}")
+                        send_telegram_message(f"🔄 Trailing stop actualizado para {symbol} (BUY): {trailing_stop}")
+                else:  # SELL
+                    min_price = min(pos["entry_price"], current_offer)
+                    price_change = (loss_amount_usd * leverage) / quantity
+                    trailing_stop = round(min_price + price_change, 5)
+                    if trailing_stop < pos["stop_loss"]:
+                        update_stop_loss(cst, x_security_token, pos["dealId"], trailing_stop)
+                        pos["stop_loss"] = trailing_stop
+                        logger.info(f"Trailing stop actualizado para {symbol} (SELL): {trailing_stop}")
+                        send_telegram_message(f"🔄 Trailing stop actualizado para {symbol} (SELL): {trailing_stop}")
+                save_positions(open_positions)
+            await asyncio.sleep(5)  # Monitoreo cada 5 segundos
+        except Exception as e:
+            logger.error(f"Error en monitor_trailing_stop: {e}")
+            send_telegram_message(f"❌ Error en monitoreo de trailing stop: {str(e)}")
+            await asyncio.sleep(10)  # Esperar más tiempo antes de reintentar en caso de error
+
+@app.on_event("startup")
+async def startup_event():
+    global open_positions
+    open_positions = load_positions()
+    cst, x_security_token = authenticate()
+    sync_open_positions(cst, x_security_token)
+    send_telegram_message("🚀 Bot iniciado correctamente.")
+    # Iniciar el monitoreo de trailing stop en segundo plano
+    asyncio.create_task(monitor_trailing_stop())
 
 @app.post("/update_trailing")
 async def update_trailing(request: Request):
@@ -494,31 +517,31 @@ async def update_trailing(request: Request):
         if pos["direction"] == "BUY":
             max_price = max(pos["entry_price"], current_price)
             quantity = pos["quantity"]
-            leverage = 100.0  # Apalancamiento 100:1
-            loss_amount_usd = 10.0  # Pérdida fija de $10 USD por operación (ajustado según tu solicitud)
+            leverage = 100.0
+            loss_amount_usd = 10.0
             price_change = (loss_amount_usd * leverage) / quantity
-            trailing_stop = round(max_price - price_change, 5)  # Redondear a 5 decimales
+            trailing_stop = round(max_price - price_change, 5)
             if trailing_stop > pos["stop_loss"]:
                 update_stop_loss(cst, x_security_token, pos["dealId"], trailing_stop)
                 pos["stop_loss"] = trailing_stop
-                print(f"Trailing stop actualizado para {symbol}: {trailing_stop}")
+                logger.info(f"Trailing stop actualizado para {symbol} (BUY): {trailing_stop}")
                 send_telegram_message(f"🔄 Trailing stop actualizado para {symbol} (BUY): {trailing_stop}")
-        else:  # SELL
+        else:
             min_price = min(pos["entry_price"], current_price)
             quantity = pos["quantity"]
-            leverage = 100.0  # Apalancamiento 100:1
-            loss_amount_usd = 10.0  # Pérdida fija de $10 USD por operación (ajustado según tu solicitud)
+            leverage = 100.0
+            loss_amount_usd = 10.0
             price_change = (loss_amount_usd * leverage) / quantity
-            trailing_stop = round(min_price + price_change, 5)  # Redondear a 5 decimales
+            trailing_stop = round(min_price + price_change, 5)
             if trailing_stop < pos["stop_loss"]:
                 update_stop_loss(cst, x_security_token, pos["dealId"], trailing_stop)
                 pos["stop_loss"] = trailing_stop
-                print(f"Trailing stop actualizado para {symbol}: {trailing_stop}")
+                logger.info(f"Trailing stop actualizado para {symbol} (SELL): {trailing_stop}")
                 send_telegram_message(f"🔄 Trailing stop actualizado para {symbol} (SELL): {trailing_stop}")
         
-        save_positions(open_positions)  # Guardar estado actualizado
+        save_positions(open_positions)
         return {"message": f"Trailing stop actualizado para {symbol}"}
     except Exception as e:
-        print(f"Error al actualizar trailing stop: {e}")
+        logger.error(f"Error al actualizar trailing stop: {e}")
         send_telegram_message(f"❌ Error al actualizar trailing stop para {symbol}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
