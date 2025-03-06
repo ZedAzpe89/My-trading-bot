@@ -17,8 +17,8 @@ CUSTOM_PASSWORD = os.getenv("CUSTOM_PASSWORD")
 ACCOUNT_ID = os.getenv("ACCOUNT_ID")
 
 # Configuración de Telegram
-TELEGRAM_TOKEN = "7247126230:AAFBj8M6cca3NHcN6rUr0wDNyTZtu8dq-LQ"  # Reemplaza con el token de tu bot
-TELEGRAM_CHAT_ID = "-4757476521"       # Reemplaza con el chat ID de tu grupo
+TELEGRAM_TOKEN = "tu-telegram-token-aqui"  # Reemplaza con el token de tu bot
+TELEGRAM_CHAT_ID = "tu-chat-id-aqui"       # Reemplaza con el chat ID de tu grupo
 
 open_positions = {}
 
@@ -143,6 +143,14 @@ def get_position_details(cst: str, x_security_token: str, epic: str):
             }
     return None
 
+def get_deal_confirmation(cst: str, x_security_token: str, deal_reference: str):
+    """Obtiene los detalles de la confirmación de una operación cerrada."""
+    headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
+    response = requests.get(f"{CAPITAL_API_URL}/confirms/{deal_reference}", headers=headers)
+    if response.status_code != 200:
+        raise Exception(f"Error al obtener confirmación de la operación: {response.text}")
+    return response.json()
+
 def sync_open_positions(cst: str, x_security_token: str):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
     response = requests.get(f"{CAPITAL_API_URL}/positions", headers=headers)
@@ -248,9 +256,11 @@ async def webhook(request: Request):
                 if action == opposite_action:
                     print(f"Intentando cerrar posición para {symbol} con dealId: {pos['dealId']}")
                     try:
-                        # Obtener el precio actual del mercado para calcular ganancias/pérdidas
-                        _, current_bid, current_offer, _, _ = get_market_details(cst, x_security_token, symbol)
-                        exit_price = current_bid if pos["direction"] == "BUY" else current_offer
+                        # Cerrar la posición y obtener el dealReference del cierre
+                        deal_ref = close_position(cst, x_security_token, pos["dealId"], symbol, adjusted_quantity)
+                        # Obtener el precio de cierre exacto desde la confirmación de la operación
+                        confirmation = get_deal_confirmation(cst, x_security_token, deal_ref)
+                        exit_price = float(confirmation.get("level", 0.0))  # Precio de cierre exacto
                         quantity = pos["quantity"]
                         leverage = 100.0  # Apalancamiento 100:1
                         if pos["direction"] == "BUY":
@@ -259,9 +269,8 @@ async def webhook(request: Request):
                             profit_loss = (pos["entry_price"] - exit_price) * quantity / leverage
                         profit_loss = round(profit_loss, 2)
 
-                        close_position(cst, x_security_token, pos["dealId"], symbol, adjusted_quantity)
                         print(f"Posición cerrada para {symbol} por señal opuesta")
-                        send_telegram_message(f"🔒 Posición cerrada para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia/pérdida: {profit_loss} USD")
+                        send_telegram_message(f"🔒 Posición cerrada para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia/pérdida: {'$' + str(profit_loss) if profit_loss >= 0 else '-$' + str(abs(profit_loss))} USD")
                         del open_positions[symbol]
                         
                         # Verificar si hay posiciones abiertas antes de abrir una nueva
@@ -375,13 +384,6 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
         raise Exception(f"No se encontró '{deal_key}' en la respuesta: {response_json}")
     return response_json[deal_key]
 
-def update_stop_loss(cst: str, x_security_token: str, deal_id: str, new_stop_loss: float):
-    headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token, "Content-Type": "application/json"}
-    payload = {"stopLevel": round(new_stop_loss, 5)}  # Redondear a 5 decimales
-    response = requests.put(f"{CAPITAL_API_URL}/positions/{deal_id}", headers=headers, json=payload)
-    if response.status_code != 200:
-        raise Exception(f"Error al actualizar stop loss: {response.text}")
-
 def close_position(cst: str, x_security_token: str, deal_id: str, epic: str, size: float):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
     try:
@@ -390,9 +392,19 @@ def close_position(cst: str, x_security_token: str, deal_id: str, epic: str, siz
             error_msg = response.text
             print(f"Error en close_position: {error_msg}")
             raise Exception(f"Error al cerrar posición: {error_msg}")
+        response_json = response.json()
+        deal_ref = response_json.get("dealReference")
+        print(f"Posición cerrada exitosamente para dealId: {deal_id}")
+        return deal_ref  # Devolver el dealReference para obtener la confirmación
     except Exception as e:
         raise Exception(f"Error al cerrar posición: {str(e)}")
-    print(f"Posición cerrada exitosamente para dealId: {deal_id}")
+
+def update_stop_loss(cst: str, x_security_token: str, deal_id: str, new_stop_loss: float):
+    headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token, "Content-Type": "application/json"}
+    payload = {"stopLevel": round(new_stop_loss, 5)}  # Redondear a 5 decimales
+    response = requests.put(f"{CAPITAL_API_URL}/positions/{deal_id}", headers=headers, json=payload)
+    if response.status_code != 200:
+        raise Exception(f"Error al actualizar stop loss: {response.text}")
 
 @app.post("/update_trailing")
 async def update_trailing(request: Request):
