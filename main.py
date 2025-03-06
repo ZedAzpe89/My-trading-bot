@@ -138,7 +138,7 @@ def get_position_details(cst: str, x_security_token: str, epic: str):
                 "dealId": position["position"]["dealId"],
                 "direction": position["position"]["direction"],
                 "entry_price": float(position["position"]["level"]),
-                "stop_loss": float(position["position"].get("stopLevel", None)) if "stopLevel" in position["position"] else None,  # Manejar la falta de stopLevel
+                "stop_loss": float(position["position"].get("stopLevel", None)) if "stopLevel" in position["position"] else None,
                 "quantity": float(position["position"]["size"])
             }
     return None
@@ -151,17 +151,19 @@ def get_deal_confirmation(cst: str, x_security_token: str, deal_reference: str, 
         if response.status_code == 200:
             confirmation = response.json()
             print(f"Respuesta de /confirms/{deal_reference}: {json.dumps(confirmation, indent=2)}")
-            # Verificar si el campo 'level' está presente y es un precio válido
-            if "level" in confirmation and confirmation["level"] is not None:
+            # Verificar si el campo 'profit' o 'level' está presente y es válido
+            if "profit" in confirmation and confirmation["profit"] is not None:
+                return confirmation
+            elif "level" in confirmation and confirmation["level"] is not None:
                 return confirmation
             else:
-                print(f"Advertencia: Campo 'level' no encontrado en la confirmación (intento {attempt + 1}/{retries})")
+                print(f"Advertencia: Campos 'profit' o 'level' no encontrados en la confirmación (intento {attempt + 1}/{retries})")
         else:
             print(f"Error al obtener confirmación (intento {attempt + 1}/{retries}): {response.text}")
         # Esperar antes de reintentar
         if attempt < retries - 1:
             time.sleep(delay)
-    raise Exception(f"No se pudo obtener el precio de cierre exacto después de {retries} intentos")
+    raise Exception(f"No se pudo obtener la confirmación después de {retries} intentos")
 
 def sync_open_positions(cst: str, x_security_token: str):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
@@ -273,15 +275,22 @@ async def webhook(request: Request):
                         # Obtener el precio de cierre exacto desde la confirmación de la operación
                         try:
                             confirmation = get_deal_confirmation(cst, x_security_token, deal_ref)
-                            exit_price = float(confirmation.get("level", 0.0))  # Precio de cierre exacto
-                            profit_loss = float(confirmation.get("profit", 0.0))  # Usar el profit/loss directamente si está disponible
-                            if profit_loss == 0.0:  # Si no está disponible, calcular manualmente
+                            # Usar el campo 'profit' directamente si está disponible
+                            if "profit" in confirmation and confirmation["profit"] is not None:
+                                profit_loss = float(confirmation["profit"])
+                            else:
+                                # Si no está disponible, calcular manualmente ajustando por spread inicial
+                                exit_price = float(confirmation.get("level", 0.0))  # Precio de cierre exacto
                                 quantity = pos["quantity"]
                                 leverage = 100.0  # Apalancamiento 100:1
+                                spread_points = 0.00465  # Spread inicial de 465 puntos (0.00465)
                                 if pos["direction"] == "BUY":
-                                    profit_loss = (exit_price - pos["entry_price"]) * quantity / leverage
+                                    # Ajustar el precio de entrada por el spread inicial
+                                    adjusted_entry_price = pos["entry_price"] + spread_points
+                                    profit_loss = (exit_price - adjusted_entry_price) * quantity / leverage
                                 else:  # SELL
-                                    profit_loss = (pos["entry_price"] - exit_price) * quantity / leverage
+                                    adjusted_entry_price = pos["entry_price"] - spread_points
+                                    profit_loss = (adjusted_entry_price - exit_price) * quantity / leverage
                         except Exception as e:
                             print(f"Error al obtener confirmación de cierre: {e}, usando precio actual como respaldo")
                             # Usar el precio actual como respaldo si la confirmación falla
@@ -289,10 +298,13 @@ async def webhook(request: Request):
                             exit_price = current_bid if pos["direction"] == "BUY" else current_offer
                             quantity = pos["quantity"]
                             leverage = 100.0  # Apalancamiento 100:1
+                            spread_points = 0.00465  # Spread inicial de 465 puntos (0.00465)
                             if pos["direction"] == "BUY":
-                                profit_loss = (exit_price - pos["entry_price"]) * quantity / leverage
+                                adjusted_entry_price = pos["entry_price"] + spread_points
+                                profit_loss = (exit_price - adjusted_entry_price) * quantity / leverage
                             else:  # SELL
-                                profit_loss = (pos["entry_price"] - exit_price) * quantity / leverage
+                                adjusted_entry_price = pos["entry_price"] - spread_points
+                                profit_loss = (adjusted_entry_price - exit_price) * quantity / leverage
                         
                         profit_loss = round(profit_loss, 2)
 
