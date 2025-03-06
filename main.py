@@ -181,7 +181,7 @@ def calculate_valid_stop_loss(entry_price, direction, min_stop_distance, max_sto
         max_stop_value = entry_price * (max_stop_distance / 100) if isinstance(max_stop_distance, float) else None
     
     if direction == "BUY":
-        stop_loss = round(entry_price * 0.9995, 5)  # -0.05%, redondeado a 5 decimales
+        stop_loss = round(entry_price * 0.9993, 5)  # -0.07%, redondeado a 5 decimales
         # Asegurar que el stop loss cumpla con min_stop_distance (no más cerca del precio de entrada)
         final_stop = max(stop_loss, round(entry_price - min_stop_value, 5))  # Asegurar distancia mínima
         if max_stop_distance and final_stop < (entry_price - round(entry_price * (max_stop_distance / 100), 5)):
@@ -189,7 +189,7 @@ def calculate_valid_stop_loss(entry_price, direction, min_stop_distance, max_sto
         print(f"Stop Loss para BUY calculado: {final_stop}, entry_price: {entry_price}, min_stop: {min_stop_value}, max_stop: {max_stop_value}")
         return final_stop
     else:
-        stop_loss = round(entry_price * 1.0005, 5)  # +0.05%, redondeado a 5 decimales
+        stop_loss = round(entry_price * 1.0007, 5)  # +0.07%, redondeado a 5 decimales
         # Asegurar que el stop loss cumpla con min_stop_distance (no más cerca del precio de entrada)
         final_stop = min(stop_loss, round(entry_price + min_stop_value, 5))  # Asegurar distancia mínima
         if max_stop_distance and final_stop > (entry_price + round(entry_price * (max_stop_distance / 100), 5)):
@@ -385,14 +385,14 @@ async def update_trailing(request: Request):
         
         if pos["direction"] == "BUY":
             max_price = max(pos["entry_price"], current_price)
-            trailing_stop = round(max_price * 0.95, 5)  # Redondear a 5 decimales
+            trailing_stop = round(max_price * 0.93, 5)  # Redondear a 5 decimales
             if trailing_stop > pos["stop_loss"]:
                 update_stop_loss(cst, x_security_token, pos["dealId"], trailing_stop)
                 pos["stop_loss"] = trailing_stop
                 print(f"Trailing stop actualizado para {symbol}: {trailing_stop}")
         else:  # SELL
             min_price = min(pos["entry_price"], current_price)
-            trailing_stop = round(min_price * 1.05, 5)  # Redondear a 5 decimales
+            trailing_stop = round(min_price * 1.07, 5)  # Redondear a 5 decimales
             if trailing_stop < pos["stop_loss"]:
                 update_stop_loss(cst, x_security_token, pos["dealId"], trailing_stop)
                 pos["stop_loss"] = trailing_stop
