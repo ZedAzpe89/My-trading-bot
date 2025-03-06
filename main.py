@@ -358,7 +358,7 @@ async def webhook(request: Request):
                         except Exception as e:
                             logger.error(f"Error al abrir nueva posición para {symbol}: {e}")
                             send_telegram_message(f"❌ Error al abrir nueva posición para {symbol}: {str(e)}")
-                            return {"message": f"Posición cerrada, pero error al abrir nueva orden: {str(e)}"}
+                            return {"message": f"Posición cerrada, pero error al abrir nueva orden: {str(e)}")
             logger.info(f"Operación rechazada: Ya hay una operación abierta para {symbol}")
             send_telegram_message(f"⚠️ Operación rechazada para {symbol}: Ya hay una operación abierta")
             return {"message": f"Operación rechazada: Ya hay una operación abierta para {symbol}"}
@@ -457,9 +457,13 @@ def update_stop_loss(cst: str, x_security_token: str, deal_id: str, new_stop_los
 
 async def monitor_trailing_stop():
     """Monitorea los precios y ajusta el trailing stop en tiempo real."""
+    logger.info("Iniciando monitoreo de trailing stop...")
     while True:
         try:
             cst, x_security_token = authenticate()
+            global open_positions
+            if not open_positions:
+                open_positions = load_positions()
             for symbol, pos in open_positions.items():
                 min_size, current_bid, current_offer, spread, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
                 quantity = pos["quantity"]
@@ -489,59 +493,8 @@ async def monitor_trailing_stop():
         except Exception as e:
             logger.error(f"Error en monitor_trailing_stop: {e}")
             send_telegram_message(f"❌ Error en monitoreo de trailing stop: {str(e)}")
-            await asyncio.sleep(10)  # Esperar más tiempo antes de reintentar en caso de error
+            await asyncio.sleep(10)
 
-@app.on_event("startup")
-async def startup_event():
-    global open_positions
-    open_positions = load_positions()
-    cst, x_security_token = authenticate()
-    sync_open_positions(cst, x_security_token)
-    send_telegram_message("🚀 Bot iniciado correctamente.")
-    # Iniciar el monitoreo de trailing stop en segundo plano
-    asyncio.create_task(monitor_trailing_stop())
-
-@app.post("/update_trailing")
-async def update_trailing(request: Request):
-    try:
-        data = await request.json()
-        symbol = data["symbol"]
-        current_price = float(data["current_price"])
-        
-        if symbol not in open_positions:
-            return {"message": f"No hay posición abierta para {symbol}"}
-        
-        pos = open_positions[symbol]
-        cst, x_security_token = authenticate()
-        
-        if pos["direction"] == "BUY":
-            max_price = max(pos["entry_price"], current_price)
-            quantity = pos["quantity"]
-            leverage = 100.0
-            loss_amount_usd = 10.0
-            price_change = (loss_amount_usd * leverage) / quantity
-            trailing_stop = round(max_price - price_change, 5)
-            if trailing_stop > pos["stop_loss"]:
-                update_stop_loss(cst, x_security_token, pos["dealId"], trailing_stop)
-                pos["stop_loss"] = trailing_stop
-                logger.info(f"Trailing stop actualizado para {symbol} (BUY): {trailing_stop}")
-                send_telegram_message(f"🔄 Trailing stop actualizado para {symbol} (BUY): {trailing_stop}")
-        else:
-            min_price = min(pos["entry_price"], current_price)
-            quantity = pos["quantity"]
-            leverage = 100.0
-            loss_amount_usd = 10.0
-            price_change = (loss_amount_usd * leverage) / quantity
-            trailing_stop = round(min_price + price_change, 5)
-            if trailing_stop < pos["stop_loss"]:
-                update_stop_loss(cst, x_security_token, pos["dealId"], trailing_stop)
-                pos["stop_loss"] = trailing_stop
-                logger.info(f"Trailing stop actualizado para {symbol} (SELL): {trailing_stop}")
-                send_telegram_message(f"🔄 Trailing stop actualizado para {symbol} (SELL): {trailing_stop}")
-        
-        save_positions(open_positions)
-        return {"message": f"Trailing stop actualizado para {symbol}"}
-    except Exception as e:
-        logger.error(f"Error al actualizar trailing stop: {e}")
-        send_telegram_message(f"❌ Error al actualizar trailing stop para {symbol}: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+if __name__ == "__main__":
+    # Punto de entrada para el worker
+    asyncio.run(monitor_trailing_stop())
