@@ -17,8 +17,8 @@ CUSTOM_PASSWORD = os.getenv("CUSTOM_PASSWORD")
 ACCOUNT_ID = os.getenv("ACCOUNT_ID")
 
 # Configuración de Telegram
-TELEGRAM_TOKEN = "7247126230:AAFBj8M6cca3NHcN6rUr0wDNyTZtu8dq-LQ"  # Reemplaza con el token de tu bot
-TELEGRAM_CHAT_ID = "-4757476521"       # Reemplaza con el chat ID de tu grupo
+TELEGRAM_TOKEN = "tu-telegram-token-aqui"  # Reemplaza con el token de tu bot
+TELEGRAM_CHAT_ID = "tu-chat-id-aqui"       # Reemplaza con el chat ID de tu grupo
 
 open_positions = {}
 
@@ -143,13 +143,25 @@ def get_position_details(cst: str, x_security_token: str, epic: str):
             }
     return None
 
-def get_deal_confirmation(cst: str, x_security_token: str, deal_reference: str):
-    """Obtiene los detalles de la confirmación de una operación cerrada."""
+def get_deal_confirmation(cst: str, x_security_token: str, deal_reference: str, retries=3, delay=1):
+    """Obtiene los detalles de la confirmación de una operación cerrada con reintentos."""
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
-    response = requests.get(f"{CAPITAL_API_URL}/confirms/{deal_reference}", headers=headers)
-    if response.status_code != 200:
-        raise Exception(f"Error al obtener confirmación de la operación: {response.text}")
-    return response.json()
+    for attempt in range(retries):
+        response = requests.get(f"{CAPITAL_API_URL}/confirms/{deal_reference}", headers=headers)
+        if response.status_code == 200:
+            confirmation = response.json()
+            print(f"Respuesta de /confirms/{deal_reference}: {json.dumps(confirmation, indent=2)}")
+            # Verificar si el campo 'level' está presente y es un precio válido
+            if "level" in confirmation and confirmation["level"] is not None:
+                return confirmation
+            else:
+                print(f"Advertencia: Campo 'level' no encontrado en la confirmación (intento {attempt + 1}/{retries})")
+        else:
+            print(f"Error al obtener confirmación (intento {attempt + 1}/{retries}): {response.text}")
+        # Esperar antes de reintentar
+        if attempt < retries - 1:
+            time.sleep(delay)
+    raise Exception(f"No se pudo obtener el precio de cierre exacto después de {retries} intentos")
 
 def sync_open_positions(cst: str, x_security_token: str):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
@@ -259,14 +271,29 @@ async def webhook(request: Request):
                         # Cerrar la posición y obtener el dealReference del cierre
                         deal_ref = close_position(cst, x_security_token, pos["dealId"], symbol, adjusted_quantity)
                         # Obtener el precio de cierre exacto desde la confirmación de la operación
-                        confirmation = get_deal_confirmation(cst, x_security_token, deal_ref)
-                        exit_price = float(confirmation.get("level", 0.0))  # Precio de cierre exacto
-                        quantity = pos["quantity"]
-                        leverage = 100.0  # Apalancamiento 100:1
-                        if pos["direction"] == "BUY":
-                            profit_loss = (exit_price - pos["entry_price"]) * quantity / leverage
-                        else:  # SELL
-                            profit_loss = (pos["entry_price"] - exit_price) * quantity / leverage
+                        try:
+                            confirmation = get_deal_confirmation(cst, x_security_token, deal_ref)
+                            exit_price = float(confirmation.get("level", 0.0))  # Precio de cierre exacto
+                            profit_loss = float(confirmation.get("profit", 0.0))  # Usar el profit/loss directamente si está disponible
+                            if profit_loss == 0.0:  # Si no está disponible, calcular manualmente
+                                quantity = pos["quantity"]
+                                leverage = 100.0  # Apalancamiento 100:1
+                                if pos["direction"] == "BUY":
+                                    profit_loss = (exit_price - pos["entry_price"]) * quantity / leverage
+                                else:  # SELL
+                                    profit_loss = (pos["entry_price"] - exit_price) * quantity / leverage
+                        except Exception as e:
+                            print(f"Error al obtener confirmación de cierre: {e}, usando precio actual como respaldo")
+                            # Usar el precio actual como respaldo si la confirmación falla
+                            _, current_bid, current_offer, _, _ = get_market_details(cst, x_security_token, symbol)
+                            exit_price = current_bid if pos["direction"] == "BUY" else current_offer
+                            quantity = pos["quantity"]
+                            leverage = 100.0  # Apalancamiento 100:1
+                            if pos["direction"] == "BUY":
+                                profit_loss = (exit_price - pos["entry_price"]) * quantity / leverage
+                            else:  # SELL
+                                profit_loss = (pos["entry_price"] - exit_price) * quantity / leverage
+                        
                         profit_loss = round(profit_loss, 2)
 
                         print(f"Posición cerrada para {symbol} por señal opuesta")
