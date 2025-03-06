@@ -168,6 +168,7 @@ def get_deal_confirmation(cst: str, x_security_token: str, deal_reference: str, 
     raise Exception(f"No se pudo obtener la confirmación después de {retries} intentos")
 
 def sync_open_positions(cst: str, x_security_token: str):
+    global open_positions  # Declarar como global al inicio
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
     response = requests.get(f"{CAPITAL_API_URL}/positions", headers=headers)
     if response.status_code != 200:
@@ -199,7 +200,6 @@ def sync_open_positions(cst: str, x_security_token: str):
             send_telegram_message(f"🔒 Posición cerrada por stop loss para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia/pérdida: {profit_loss_message}")
             print(f"Posición cerrada por stop loss para {symbol}, profit_loss: {profit_loss} USD")
     
-    global open_positions
     open_positions = synced_positions  # Actualizar globalmente
     save_positions(open_positions)  # Guardar en Google Drive
     print(f"Posiciones sincronizadas: {json.dumps(open_positions, indent=2)}")
