@@ -122,9 +122,10 @@ def get_market_details(cst: str, x_security_token: str, epic: str):
     min_size = details["dealingRules"]["minDealSize"]["value"]
     current_bid = details["snapshot"]["bid"]
     current_offer = details["snapshot"]["offer"]
+    spread = current_offer - current_bid  # Calcular spread dinámico
     min_stop_distance = details["dealingRules"]["minStopOrProfitDistance"]["value"] if "minStopOrProfitDistance" in details["dealingRules"] else 0.01  # Valor por defecto 0.01%
     max_stop_distance = details["dealingRules"]["maxStopOrProfitDistance"]["value"] if "maxStopOrProfitDistance" in details["dealingRules"] else None
-    return min_size, current_bid, current_offer, min_stop_distance, max_stop_distance
+    return min_size, current_bid, current_offer, spread, min_stop_distance, max_stop_distance
 
 def get_position_details(cst: str, x_security_token: str, epic: str):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
@@ -250,7 +251,7 @@ async def webhook(request: Request):
         
         sync_open_positions(cst, x_security_token)
         
-        min_size, current_bid, current_offer, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
+        min_size, current_bid, current_offer, spread, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
         adjusted_quantity = max(quantity, min_size)
         if adjusted_quantity != quantity:
             print(f"Ajustando quantity de {quantity} a {adjusted_quantity} para cumplir con el tamaño mínimo")
@@ -279,32 +280,36 @@ async def webhook(request: Request):
                             if "profit" in confirmation and confirmation["profit"] is not None:
                                 profit_loss = float(confirmation["profit"])
                             else:
-                                # Si no está disponible, calcular manualmente ajustando por spread inicial
+                                # Si no está disponible, calcular manualmente ajustando por spread dinámico
                                 exit_price = float(confirmation.get("level", 0.0))  # Precio de cierre exacto
                                 quantity = pos["quantity"]
                                 leverage = 100.0  # Apalancamiento 100:1
-                                spread_points = 0.00465  # Spread inicial de 465 puntos (0.00465)
+                                # Obtener spread al cerrar
+                                _, close_bid, close_offer, close_spread, _, _ = get_market_details(cst, x_security_token, symbol)
+                                # Ajustar el precio de entrada por el spread inicial (almacenado o estimado)
                                 if pos["direction"] == "BUY":
-                                    # Ajustar el precio de entrada por el spread inicial
-                                    adjusted_entry_price = pos["entry_price"] + spread_points
-                                    profit_loss = (exit_price - adjusted_entry_price) * quantity / leverage
+                                    adjusted_entry_price = pos["entry_price"] + spread  # Spread al abrir
+                                    adjusted_exit_price = exit_price - close_spread  # Ajustar por spread al cerrar
+                                    profit_loss = (adjusted_exit_price - adjusted_entry_price) * quantity / leverage
                                 else:  # SELL
-                                    adjusted_entry_price = pos["entry_price"] - spread_points
-                                    profit_loss = (adjusted_entry_price - exit_price) * quantity / leverage
+                                    adjusted_entry_price = pos["entry_price"] - spread  # Spread al abrir
+                                    adjusted_exit_price = exit_price + close_spread  # Ajustar por spread al cerrar
+                                    profit_loss = (adjusted_entry_price - adjusted_exit_price) * quantity / leverage
                         except Exception as e:
                             print(f"Error al obtener confirmación de cierre: {e}, usando precio actual como respaldo")
                             # Usar el precio actual como respaldo si la confirmación falla
-                            _, current_bid, current_offer, _, _ = get_market_details(cst, x_security_token, symbol)
+                            _, current_bid, current_offer, close_spread, _, _ = get_market_details(cst, x_security_token, symbol)
                             exit_price = current_bid if pos["direction"] == "BUY" else current_offer
                             quantity = pos["quantity"]
                             leverage = 100.0  # Apalancamiento 100:1
-                            spread_points = 0.00465  # Spread inicial de 465 puntos (0.00465)
                             if pos["direction"] == "BUY":
-                                adjusted_entry_price = pos["entry_price"] + spread_points
-                                profit_loss = (exit_price - adjusted_entry_price) * quantity / leverage
+                                adjusted_entry_price = pos["entry_price"] + spread  # Spread al abrir
+                                adjusted_exit_price = exit_price - close_spread  # Ajustar por spread al cerrar
+                                profit_loss = (adjusted_exit_price - adjusted_entry_price) * quantity / leverage
                             else:  # SELL
-                                adjusted_entry_price = pos["entry_price"] - spread_points
-                                profit_loss = (adjusted_entry_price - exit_price) * quantity / leverage
+                                adjusted_entry_price = pos["entry_price"] - spread  # Spread al abrir
+                                adjusted_exit_price = exit_price + close_spread  # Ajustar por spread al cerrar
+                                profit_loss = (adjusted_entry_price - adjusted_exit_price) * quantity / leverage
                         
                         profit_loss = round(profit_loss, 2)
 
@@ -324,7 +329,8 @@ async def webhook(request: Request):
                                 "entry_price": entry_price,
                                 "stop_loss": initial_stop_loss,
                                 "dealId": deal_id,
-                                "quantity": adjusted_quantity
+                                "quantity": adjusted_quantity,
+                                "spread_at_open": spread  # Almacenar spread al abrir
                             }
                             save_positions(open_positions)  # Guardar estado actualizado
                             return {"message": f"Posición cerrada y nueva orden {action.upper()} ejecutada para {symbol}"}
@@ -348,7 +354,8 @@ async def webhook(request: Request):
             "entry_price": entry_price,
             "stop_loss": initial_stop_loss,
             "dealId": deal_id,
-            "quantity": adjusted_quantity
+            "quantity": adjusted_quantity,
+            "spread_at_open": spread  # Almacenar spread al abrir
         }
         save_positions(open_positions)  # Guardar estado actualizado
         
