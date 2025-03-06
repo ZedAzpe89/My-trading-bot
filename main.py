@@ -111,7 +111,7 @@ class Signal(BaseModel):
     quantity: float = 10000.0
     source: str = "rsi"
     timeframe: str = "1m"
-    loss_amount_usd: float = 6.0  # Permitir configurar la pérdida máxima desde la solicitud
+    loss_amount_usd: float = 10.0  # Cambiado a -10 USD como solicitado
 
 def get_market_details(cst: str, x_security_token: str, epic: str):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
@@ -189,8 +189,18 @@ def sync_open_positions(cst: str, x_security_token: str):
             "quantity": float(pos["position"]["size"])
         }
     
+    # Detectar cierres por stop loss comparando con open_positions
+    closed_positions = {k: v for k, v in open_positions.items() if k not in synced_positions}
+    for symbol, pos in closed_positions.items():
+        if pos["stop_loss"] and (pos["direction"] == "BUY" and pos["stop_loss"] >= pos["entry_price"]) or (pos["direction"] == "SELL" and pos["stop_loss"] <= pos["entry_price"]):
+            # Asumir que se cerró por stop loss
+            profit_loss = calculate_profit_loss_from_stop_loss(pos)
+            profit_loss_message = f"+${profit_loss} USD" if profit_loss >= 0 else f"-${abs(profit_loss)} USD"
+            send_telegram_message(f"🔒 Posición cerrada por stop loss para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia/pérdida: {profit_loss_message}")
+            print(f"Posición cerrada por stop loss para {symbol}, profit_loss: {profit_loss} USD")
+    
     global open_positions
-    open_positions = synced_positions  # Actualizar globalmente sin abrir operaciones automáticamente
+    open_positions = synced_positions  # Actualizar globalmente
     save_positions(open_positions)  # Guardar en Google Drive
     print(f"Posiciones sincronizadas: {json.dumps(open_positions, indent=2)}")
 
@@ -226,6 +236,18 @@ def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity,
             final_stop = entry_price + round(entry_price * (max_stop_distance / 100), 5)  # Asegurar distancia máxima
         print(f"Stop Loss para SELL calculado: {final_stop}, entry_price: {entry_price}, loss_amount_usd: {loss_amount_usd}, price_change: {price_change}, effective_price_change: {effective_price_change}, min_stop: {min_stop_value}, max_stop: {max_stop_value}, safety_margin: {safety_margin}")
         return final_stop
+
+def calculate_profit_loss_from_stop_loss(pos):
+    """Calcula la ganancia/pérdida aproximada cuando se cierra por stop loss."""
+    entry_price = pos["entry_price"]
+    stop_loss = pos["stop_loss"]
+    quantity = pos["quantity"]
+    leverage = 100.0  # Apalancamiento 100:1
+    if pos["direction"] == "BUY":
+        profit_loss = (stop_loss - entry_price) * quantity / leverage
+    else:  # SELL
+        profit_loss = (entry_price - stop_loss) * quantity / leverage
+    return round(profit_loss, 2)
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -282,40 +304,27 @@ async def webhook(request: Request):
                                 profit_loss = float(confirmation["profit"])
                                 print(f"Profit/loss obtenido de /confirms: {profit_loss} USD")
                             else:
-                                # Si no está disponible, calcular manualmente ajustando por spread dinámico
-                                exit_price = float(confirmation.get("level", 0.0))  # Precio de cierre exacto
+                                # Si no está disponible, usar el precio actual como respaldo
+                                _, current_bid, current_offer, close_spread, _, _ = get_market_details(cst, x_security_token, symbol)
+                                exit_price = current_bid if pos["direction"] == "BUY" else current_offer
                                 quantity = pos["quantity"]
                                 leverage = 100.0  # Apalancamiento 100:1
-                                # Obtener spread al cerrar
-                                _, close_bid, close_offer, close_spread, _, _ = get_market_details(cst, x_security_token, symbol)
-                                # Ajustar el precio de entrada por el spread inicial (almacenado o estimado)
-                                spread_at_open = pos.get("spread_at_open", spread)  # Usar spread al abrir si está almacenado
                                 if pos["direction"] == "BUY":
-                                    adjusted_entry_price = pos["entry_price"]  # Usar precio sin ajuste adicional
-                                    adjusted_exit_price = exit_price
-                                    profit_loss = (adjusted_exit_price - adjusted_entry_price) * quantity / leverage
+                                    profit_loss = (exit_price - pos["entry_price"]) * quantity / leverage
                                 else:  # SELL
-                                    adjusted_entry_price = pos["entry_price"]
-                                    adjusted_exit_price = exit_price
-                                    profit_loss = (adjusted_entry_price - adjusted_exit_price) * quantity / leverage
-                                print(f"Profit/loss calculado manualmente: entry_price={adjusted_entry_price}, exit_price={adjusted_exit_price}, profit_loss={profit_loss} USD")
+                                    profit_loss = (pos["entry_price"] - exit_price) * quantity / leverage
+                                print(f"Profit/loss calculado con precio actual: entry_price={pos['entry_price']}, exit_price={exit_price}, profit_loss={profit_loss} USD")
                         except Exception as e:
                             print(f"Error al obtener confirmación de cierre: {e}, usando precio actual como respaldo")
-                            # Usar el precio actual como respaldo si la confirmación falla
                             _, current_bid, current_offer, close_spread, _, _ = get_market_details(cst, x_security_token, symbol)
                             exit_price = current_bid if pos["direction"] == "BUY" else current_offer
                             quantity = pos["quantity"]
                             leverage = 100.0  # Apalancamiento 100:1
-                            spread_at_open = pos.get("spread_at_open", spread)  # Usar spread al abrir si está almacenado
                             if pos["direction"] == "BUY":
-                                adjusted_entry_price = pos["entry_price"]
-                                adjusted_exit_price = exit_price
-                                profit_loss = (adjusted_exit_price - adjusted_entry_price) * quantity / leverage
+                                profit_loss = (exit_price - pos["entry_price"]) * quantity / leverage
                             else:  # SELL
-                                adjusted_entry_price = pos["entry_price"]
-                                adjusted_exit_price = exit_price
-                                profit_loss = (adjusted_entry_price - adjusted_exit_price) * quantity / leverage
-                            print(f"Profit/loss calculado con precio actual: entry_price={adjusted_entry_price}, exit_price={adjusted_exit_price}, profit_loss={profit_loss} USD")
+                                profit_loss = (pos["entry_price"] - exit_price) * quantity / leverage
+                            print(f"Profit/loss calculado con precio actual: entry_price={pos['entry_price']}, exit_price={exit_price}, profit_loss={profit_loss} USD")
                         
                         profit_loss = round(profit_loss, 2)
                         # Enviar mensaje de ganancias/pérdidas siempre
@@ -486,7 +495,7 @@ async def update_trailing(request: Request):
             max_price = max(pos["entry_price"], current_price)
             quantity = pos["quantity"]
             leverage = 100.0  # Apalancamiento 100:1
-            loss_amount_usd = 6.0  # Pérdida fija de $6 USD por operación (ajustado según tu prueba)
+            loss_amount_usd = 10.0  # Pérdida fija de $10 USD por operación (ajustado según tu solicitud)
             price_change = (loss_amount_usd * leverage) / quantity
             trailing_stop = round(max_price - price_change, 5)  # Redondear a 5 decimales
             if trailing_stop > pos["stop_loss"]:
@@ -498,7 +507,7 @@ async def update_trailing(request: Request):
             min_price = min(pos["entry_price"], current_price)
             quantity = pos["quantity"]
             leverage = 100.0  # Apalancamiento 100:1
-            loss_amount_usd = 6.0  # Pérdida fija de $6 USD por operación (ajustado según tu prueba)
+            loss_amount_usd = 10.0  # Pérdida fija de $10 USD por operación (ajustado según tu solicitud)
             price_change = (loss_amount_usd * leverage) / quantity
             trailing_stop = round(min_price + price_change, 5)  # Redondear a 5 decimales
             if trailing_stop < pos["stop_loss"]:
