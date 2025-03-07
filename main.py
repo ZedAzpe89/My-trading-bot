@@ -13,7 +13,7 @@ import logging
 from contextlib import asynccontextmanager
 
 # Configuración de logging
-logging.basicConfig(level=logging.INFO)  # Nivel INFO para más detalles
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configuración de constantes y variables globales
@@ -22,15 +22,12 @@ API_KEY = os.getenv("API_KEY")
 CUSTOM_PASSWORD = os.getenv("CUSTOM_PASSWORD")
 ACCOUNT_ID = os.getenv("ACCOUNT_ID")
 
-# Configuración de Telegram desde variables de entorno
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# Validar que las variables de Telegram estén definidas
 if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
     raise ValueError("Las variables de entorno TELEGRAM_TOKEN y TELEGRAM_CHAT_ID deben estar definidas en Render.")
 
-# Variables globales
 open_positions = {}
 cst = None
 x_security_token = None
@@ -127,7 +124,7 @@ def get_market_details(cst: str, x_security_token: str, epic: str):
     current_bid = details["snapshot"]["bid"]
     current_offer = details["snapshot"]["offer"]
     spread = current_offer - current_bid
-    min_stop_distance = details["dealingRules"]["minStopOrProfitDistance"]["value"] if "minStopOrProfitDistance" in details["dealingRules"] else 0.01
+    min_stop_distance = details["dealingRules"]["minStopOrProfitDistance"]["value"] if "minStopOrProfitDistance" in details["dealingRules"] else 0.0001  # Ajustado a 10 pips por defecto
     max_stop_distance = details["dealingRules"]["maxStopOrProfitDistance"]["value"] if "maxStopOrProfitDistance" in details["dealingRules"] else None
     logger.info(f"Detalles de mercado para {epic}: min_stop_distance={min_stop_distance}")
     return min_size, current_bid, current_offer, spread, min_stop_distance, max_stop_distance
@@ -194,7 +191,6 @@ def sync_open_positions(cst: str, x_security_token: str):
                 stop_level = None
                 logger.warning(f"Advertencia: No se encontró stopLevel para posición en {epic}, usando None")
             size = float(pos["position"]["size"])
-            # Ajuste temporal del quantity basado en cálculos previos
             if epic == "USDCAD":
                 quantity = 670667.0
             elif epic == "EURUSD":
@@ -202,7 +198,7 @@ def sync_open_positions(cst: str, x_security_token: str):
             elif epic == "USDMXN":
                 quantity = 34848.0
             else:
-                quantity = size * 100000  # Fallback para otros pares
+                quantity = size * 100000
             synced_positions[epic] = {
                 "direction": pos["position"]["direction"],
                 "entry_price": float(pos["position"]["level"]),
@@ -231,10 +227,10 @@ def sync_open_positions(cst: str, x_security_token: str):
 def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity, leverage, min_stop_distance, max_stop_distance=None, symbol=None):
     entry_price = round(entry_price, 5 if symbol in ["USDCAD", "EURUSD"] else 4)
     if min_stop_distance <= 0:
-        min_stop_distance = 0.01
-    min_stop_value = entry_price * (min_stop_distance / 100) if isinstance(min_stop_distance, float) else 0.01
+        min_stop_distance = 0.0001  # Valor por defecto ajustado a 10 pips
+    min_stop_value = min_stop_distance
     if max_stop_distance:
-        max_stop_value = entry_price * (max_stop_distance / 100) if isinstance(max_stop_distance, float) else None
+        max_stop_value = max_stop_distance
     
     price_change = (loss_amount_usd * leverage) / quantity
     safety_margin = min_stop_value * 1.5
@@ -243,13 +239,13 @@ def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity,
     if direction == "BUY":
         stop_loss = entry_price - effective_price_change
         final_stop = max(stop_loss, entry_price - min_stop_value * 2)
-        if max_stop_distance and final_stop < (entry_price - (entry_price * (max_stop_distance / 100))):
-            final_stop = entry_price - (entry_price * (max_stop_distance / 100))
+        if max_stop_distance and final_stop < (entry_price - max_stop_value):
+            final_stop = entry_price - max_stop_value
     else:
         stop_loss = entry_price + effective_price_change
         final_stop = min(stop_loss, entry_price + min_stop_value * 2)
-        if max_stop_distance and final_stop > (entry_price + (entry_price * (max_stop_distance / 100))):
-            final_stop = entry_price + (entry_price * (max_stop_distance / 100))
+        if max_stop_distance and final_stop > (entry_price + max_stop_value):
+            final_stop = entry_price + max_stop_value
     
     return round(final_stop, 5 if symbol in ["USDCAD", "EURUSD"] else 4)
 
@@ -265,10 +261,9 @@ def calculate_profit_loss_from_stop_loss(pos):
     return round(profit_loss, 2)
 
 def calculate_current_profit(pos, current_bid, current_offer):
-    """Calcula la ganancia/pérdida actual en USD."""
     entry_price = pos["entry_price"]
     quantity = pos["quantity"]
-    leverage = 100.0  # Usaremos el leverage predeterminado hasta que obtengamos el real
+    leverage = 100.0
     if pos["direction"] == "BUY":
         profit = (current_bid - entry_price) * quantity / leverage
     else:
@@ -277,12 +272,11 @@ def calculate_current_profit(pos, current_bid, current_offer):
     return profit
 
 def convert_profit_to_usd(profit, symbol, current_bid):
-    """Convierte la ganancia/pérdida a USD según el par de divisas."""
     if symbol == "USDMXN" and isinstance(profit, (int, float)):
         profit_usd = profit / current_bid
         logger.info(f"Conversión de profit para {symbol}: profit={profit} MXN, current_bid={current_bid}, profit_usd={profit_usd}")
         return round(profit_usd, 2)
-    return round(profit, 2)  # Asume USD por defecto
+    return round(profit, 2)
 
 def get_active_trades(cst: str, x_security_token: str, symbol: str):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
@@ -313,8 +307,7 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
         if not isinstance(stop_loss, (int, float)) or stop_loss <= 0:
             logger.warning(f"Advertencia: stop_loss inválido ({stop_loss}), omitiendo stopLevel")
         else:
-            payload["stopLevel"] = stop_loss  # Ya está redondeado en la función que lo calcula
-    
+            payload["stopLevel"] = stop_loss
     try:
         response = requests.post(f"{CAPITAL_API_URL}/positions", headers=headers, json=payload, timeout=10)
         if response.status_code != 200:
@@ -323,7 +316,6 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
             raise Exception(f"Error al ejecutar la orden: {error_msg}")
     except Exception as e:
         raise Exception(f"Error al ejecutar la orden: {str(e)}")
-    
     response_json = response.json()
     deal_key = "dealReference" if "dealReference" in response_json else "dealId"
     if deal_key not in response_json:
@@ -347,24 +339,23 @@ def close_position(cst: str, x_security_token: str, deal_id: str, epic: str, siz
 
 def update_stop_loss(cst: str, x_security_token: str, deal_id: str, new_stop_loss: float, symbol: str):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token, "Content-Type": "application/json"}
-    # Redondear según el par de divisas
     new_stop_loss = round(new_stop_loss, 5 if symbol in ["USDCAD", "EURUSD"] else 4)
     payload = {"stopLevel": new_stop_loss}
     response = requests.put(f"{CAPITAL_API_URL}/positions/{deal_id}", headers=headers, json=payload)
     if response.status_code != 200:
-        raise Exception(f"Error al actualizar stop loss: {response.text}")
+        error_msg = response.json() if response.text else "Respuesta vacía"
+        logger.error(f"Error al actualizar stop loss: {error_msg}")
+        raise Exception(f"Error al actualizar stop loss: {error_msg}")
 
-# Definición del lifespan y la aplicación FastAPI
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global open_positions, cst, x_security_token
-    logger.setLevel(logging.INFO)  # Nivel INFO para el servicio web
+    logger.setLevel(logging.INFO)
     open_positions = load_positions()
     cst, x_security_token = authenticate()
     cst, x_security_token = sync_open_positions(cst, x_security_token)
     logger.info("🚀 Bot iniciado correctamente.")
     yield
-    # Limpieza al cerrar (opcional)
     logger.info("Cerrando aplicación...")
 
 app = FastAPI(lifespan=lifespan)
@@ -502,7 +493,6 @@ async def webhook(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 async def monitor_trailing_stop():
-    """Monitorea los precios y ajusta el stop loss cuando la ganancia es >= 3 USD."""
     global open_positions
     cst, x_security_token = authenticate()
     logger.setLevel(logging.INFO)
@@ -515,7 +505,6 @@ async def monitor_trailing_stop():
     
     while True:
         try:
-            # Sincronizar posiciones periódicamente con la API
             cst, x_security_token = sync_open_positions(cst, x_security_token)
             logger.info(f"Posiciones abiertas sincronizadas: {len(open_positions)} posiciones")
             
@@ -528,37 +517,35 @@ async def monitor_trailing_stop():
                 min_size, current_bid, current_offer, spread, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
                 pos = open_positions[symbol]
                 quantity = pos["quantity"]
-                leverage = 100.0  # Placeholder; idealmente obtener de la API si disponible
+                leverage = 100.0
 
-                # Definir la distancia de trailing stop según el par de divisas (en pips)
                 if symbol in ["USDCAD", "EURUSD"]:
-                    pip_value = 0.00001  # 1 pip con 5 decimales
+                    pip_value = 0.00001
                     trailing_distance = 10 * pip_value  # 10 pips
                     decimal_places = 5
                 elif symbol == "USDMXN":
-                    pip_value = 0.0001  # 1 pip con 4 decimales
+                    pip_value = 0.0001
                     trailing_distance = 50 * pip_value  # 50 pips
                     decimal_places = 4
                 else:
-                    pip_value = 0.00001  # Valor por defecto
+                    pip_value = 0.00001
                     trailing_distance = 10 * pip_value
                     decimal_places = 5
 
-                # Redondear precios según el par de divisas
                 current_bid = round(current_bid, decimal_places)
                 current_offer = round(current_offer, decimal_places)
 
-                # Calcular la ganancia actual
                 profit = calculate_current_profit(pos, current_bid, current_offer)
                 profit_usd = convert_profit_to_usd(profit, symbol, current_bid)
 
-                logger.info(f"Monitoreando {symbol}: direction={pos['direction']}, entry_price={pos['entry_price']}, current_bid={current_bid}, current_offer={current_offer}, stop_loss={pos['stop_loss']}, profit_usd={profit_usd}, quantity={quantity}, leverage={leverage}, trailing_distance={trailing_distance}")
+                logger.info(f"Monitoreando {symbol}: direction={pos['direction']}, entry_price={pos['entry_price']}, current_bid={current_bid}, current_offer={current_offer}, stop_loss={pos['stop_loss']}, profit_usd={profit_usd}, quantity={quantity}, leverage={leverage}, trailing_distance={trailing_distance}, min_stop_distance={min_stop_distance}")
 
-                # Solo actualizar el stop loss si la ganancia es mayor a 3 USD
                 if profit_usd >= 3.0:
-                    # Calcular el nuevo stop loss como un trailing stop
                     if pos["direction"] == "BUY":
+                        # Calcular el máximo permitido para el stop loss
+                        max_allowed_stop_loss = current_bid - min_stop_distance
                         new_stop_loss = max(pos["stop_loss"], current_bid - trailing_distance)
+                        new_stop_loss = min(new_stop_loss, max_allowed_stop_loss)  # Limitar al máximo permitido
                         new_stop_loss = round(new_stop_loss, decimal_places)
                         if new_stop_loss > pos["stop_loss"]:
                             update_stop_loss(cst, x_security_token, pos["dealId"], new_stop_loss, symbol)
@@ -568,7 +555,9 @@ async def monitor_trailing_stop():
                         else:
                             logger.info(f"No se actualizó trailing stop para {symbol} (BUY): new_stop_loss={new_stop_loss} <= stop_loss={pos['stop_loss']}")
                     else:  # SELL
+                        min_allowed_stop_loss = current_offer + min_stop_distance
                         new_stop_loss = min(pos["stop_loss"], current_offer + trailing_distance)
+                        new_stop_loss = max(new_stop_loss, min_allowed_stop_loss)  # Limitar al mínimo permitido
                         new_stop_loss = round(new_stop_loss, decimal_places)
                         if new_stop_loss < pos["stop_loss"]:
                             update_stop_loss(cst, x_security_token, pos["dealId"], new_stop_loss, symbol)
