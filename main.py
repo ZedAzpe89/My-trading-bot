@@ -10,8 +10,11 @@ from io import BytesIO
 import time
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 
-# Configuración de logging (solo advertencias y errores por defecto)
+# Configuración de logging
+# Para el worker: solo advertencias y errores, con mensajes clave específicos
+# Para el servicio web: nivel INFO para mostrar acciones clave
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
@@ -26,9 +29,10 @@ ACCOUNT_ID = os.getenv("ACCOUNT_ID")
 TELEGRAM_TOKEN = "7247126230:AAFBj8M6cca3NHcN6rUr0wDNyTZtu8dq-LQ"  # Reemplaza con el token de tu bot
 TELEGRAM_CHAT_ID = "-4757476521"       # Reemplaza con el chat ID de tu grupo
 
+# Variables globales
 open_positions = {}
-cst = None  # Variable global para el token CST
-x_security_token = None  # Variable global para el token de seguridad
+cst = None
+x_security_token = None
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 GOOGLE_CREDENTIALS = os.getenv("GOOGLE_CREDENTIALS")
@@ -98,15 +102,22 @@ def save_positions(data):
     upload_file(POSITIONS_FILE_NAME, POSITIONS_FILE_NAME)
 
 def load_positions():
-    return download_file(POSITIONS_FILE_NAME)
+    positions = download_file(POSITIONS_FILE_NAME)
+    return positions if positions is not None else {}
 
-@app.on_event("startup")
-async def startup_event():
+# Manejador de eventos de lifespan para reemplazar @app.on_event("startup")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     global open_positions, cst, x_security_token
+    # Configurar el nivel de logging a INFO para el servicio web
+    logger.setLevel(logging.INFO)
     open_positions = load_positions()
     cst, x_security_token = authenticate()
     sync_open_positions(cst, x_security_token)
     logger.info("🚀 Bot iniciado correctamente.")  # Mensaje clave al iniciar
+    yield
+
+app = FastAPI(lifespan=lifespan)
 
 class Signal(BaseModel):
     action: str
@@ -133,7 +144,7 @@ def get_market_details(cst: str, x_security_token: str, epic: str):
     if response.status_code != 200:
         raise Exception(f"Error al obtener detalles del mercado: {response.text}")
     details = response.json()
-    # logger.info(f"Respuesta completa de /markets/{epic}: {json.dumps(details, indent=2)}")  # Comentado
+    # logger.info(f"Respuesta completa de /markets/{epic}: {json.dumps(details, indent=2)}")  # Asegurado que esté comentado
     min_size = details["dealingRules"]["minDealSize"]["value"]
     current_bid = details["snapshot"]["bid"]
     current_offer = details["snapshot"]["offer"]
@@ -464,15 +475,23 @@ def update_stop_loss(cst: str, x_security_token: str, deal_id: str, new_stop_los
 
 async def monitor_trailing_stop():
     """Monitorea los precios y ajusta el trailing stop en tiempo real."""
-    global open_positions, cst, x_security_token
+    global cst, x_security_token
+    # Configurar el nivel de logging a WARNING para el worker
+    logger.setLevel(logging.WARNING)
     logger.info("Iniciando monitoreo de trailing stop...")  # Mensaje clave al iniciar
     if not cst or not x_security_token:
         cst, x_security_token = authenticate()
-    open_positions = load_positions()  # Inicializar explícitamente al inicio
+    
+    # Inicializar open_positions al inicio del worker
+    global open_positions
+    open_positions = load_positions()
+    if open_positions is None:
+        open_positions = {}
+    
     while True:
         try:
             if not open_positions:
-                open_positions = load_positions()
+                open_positions = load_positions() or {}
             for symbol in list(open_positions.keys()):  # Iterar sobre una copia de las claves
                 min_size, current_bid, current_offer, spread, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
                 pos = open_positions[symbol]
