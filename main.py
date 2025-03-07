@@ -218,7 +218,6 @@ def sync_open_positions(cst: str, x_security_token: str):
     
     open_positions = synced_positions
     save_positions(open_positions)
-    # logger.info(f"Posiciones sincronizadas: {json.dumps(open_positions, indent=2)}")  # Comentado
 
 def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity, leverage, min_stop_distance, max_stop_distance=None):
     entry_price = round(entry_price, 5)
@@ -237,14 +236,12 @@ def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity,
         final_stop = max(stop_loss, round(entry_price - min_stop_value * 2, 5))
         if max_stop_distance and final_stop < (entry_price - round(entry_price * (max_stop_distance / 100), 5)):
             final_stop = entry_price - round(entry_price * (max_stop_distance / 100), 5)
-        # logger.info(f"Stop Loss para BUY calculado: {final_stop}, entry_price: {entry_price}, loss_amount_usd: {loss_amount_usd}, price_change: {price_change}, effective_price_change: {effective_price_change}, min_stop: {min_stop_value}, max_stop: {max_stop_value}, safety_margin: {safety_margin}")  # Comentado
         return final_stop
     else:
         stop_loss = round(entry_price + effective_price_change, 5)
         final_stop = min(stop_loss, round(entry_price + min_stop_value * 2, 5))
         if max_stop_distance and final_stop > (entry_price + round(entry_price * (max_stop_distance / 100), 5)):
             final_stop = entry_price + round(entry_price * (max_stop_distance / 100), 5)
-        # logger.info(f"Stop Loss para SELL calculado: {final_stop}, entry_price: {entry_price}, loss_amount_usd: {loss_amount_usd}, price_change: {price_change}, effective_price_change: {effective_price_change}, min_stop: {min_stop_value}, max_stop: {max_stop_value}, safety_margin: {safety_margin}")  # Comentado
         return final_stop
 
 def calculate_profit_loss_from_stop_loss(pos):
@@ -267,14 +264,10 @@ def convert_profit_to_usd(profit, symbol, current_bid):
 @app.post("/webhook")
 async def webhook(request: Request):
     data = await request.json()
-    # logger.info("Datos crudos recibidos: %s", data)  # Comentado
     try:
         signal = Signal(**data)
-        # logger.info("Datos recibidos y parseados: %s", signal.dict())  # Comentado
-        
         action, symbol, quantity, source, timeframe, loss_amount_usd = signal.action.lower(), signal.symbol, signal.quantity, signal.source, signal.timeframe, signal.loss_amount_usd
         last_signal_15m = load_signal()
-        # logger.info(f"Última señal de 15m cargada: {last_signal_15m}")  # Comentado
         
         if timeframe == "15m":
             last_signal_15m[symbol] = action
@@ -284,7 +277,6 @@ async def webhook(request: Request):
         global cst, x_security_token
         if not cst or not x_security_token:
             cst, x_security_token = authenticate()
-        # logger.info("Autenticación exitosa en Capital.com")  # Comentado
         
         sync_open_positions(cst, x_security_token)
         
@@ -296,8 +288,6 @@ async def webhook(request: Request):
         entry_price = current_bid if action == "buy" else current_offer
         entry_price = round(entry_price, 5)
         initial_stop_loss = calculate_valid_stop_loss(entry_price, action.upper(), loss_amount_usd, adjusted_quantity, 100.0, min_stop_distance, max_stop_distance)
-        
-        # logger.info(f"Stop Loss calculado: {initial_stop_loss} para entrada a {entry_price}")  # Comentado
         
         active_trades = get_active_trades(cst, x_security_token, symbol)
         if active_trades["buy"] > 0 or active_trades["sell"] > 0:
@@ -314,7 +304,6 @@ async def webhook(request: Request):
                             if "profit" in confirmation and confirmation["profit"] is not None:
                                 profit_loss = float(confirmation["profit"])
                                 profit_loss_usd = convert_profit_to_usd(profit_loss, symbol, current_bid)
-                                # logger.info(f"Profit/loss obtenido de /confirms: {profit_loss} {confirmation.get('profitCurrency', 'USD')}, convertido a {profit_loss_usd} USD")  # Comentado
                             else:
                                 exit_price = float(confirmation.get("level", current_bid if pos["direction"] == "BUY" else current_offer))
                                 quantity = pos["quantity"]
@@ -324,7 +313,6 @@ async def webhook(request: Request):
                                 else:
                                     profit_loss = (pos["entry_price"] - exit_price) * quantity / leverage
                                 profit_loss_usd = convert_profit_to_usd(profit_loss, symbol, current_bid)
-                                # logger.info(f"Profit/loss calculado con precio actual: entry_price={pos['entry_price']}, exit_price={exit_price}, profit_loss={profit_loss_usd} USD")  # Comentado
                         except Exception as e:
                             logger.error(f"Error al obtener confirmación de cierre: {e}, usando precio actual como respaldo")
                             exit_price = current_bid if pos["direction"] == "BUY" else current_offer
@@ -335,7 +323,6 @@ async def webhook(request: Request):
                             else:
                                 profit_loss = (pos["entry_price"] - exit_price) * quantity / leverage
                             profit_loss_usd = convert_profit_to_usd(profit_loss, symbol, current_bid)
-                            # logger.info(f"Profit/loss calculado con precio actual: entry_price={pos['entry_price']}, exit_price={exit_price}, profit_loss={profit_loss_usd} USD")  # Comentado
                         
                         profit_loss_usd = round(profit_loss_usd, 2)
                         profit_loss_message = f"+${profit_loss_usd} USD" if profit_loss_usd >= 0 else f"-${abs(profit_loss_usd)} USD"
@@ -428,7 +415,6 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
             logger.warning(f"Advertencia: stop_loss inválido ({stop_loss}), omitiendo stopLevel")
         else:
             payload["stopLevel"] = round(stop_loss, 5)
-            # logger.info(f"Enviando stopLevel: {payload['stopLevel']} para {epic}")  # Comentado
     
     try:
         response = requests.post(f"{CAPITAL_API_URL}/positions", headers=headers, json=payload, timeout=10)
@@ -440,7 +426,6 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
         raise Exception(f"Error al ejecutar la orden: {str(e)}")
     
     response_json = response.json()
-    # logger.info(f"Respuesta completa de place_order: {json.dumps(response_json, indent=2)}")  # Comentado
     deal_key = "dealReference" if "dealReference" in response_json else "dealId"
     if deal_key not in response_json:
         logger.error(f"Respuesta inesperada: {response_json}")
@@ -457,7 +442,6 @@ def close_position(cst: str, x_security_token: str, deal_id: str, epic: str, siz
             raise Exception(f"Error al cerrar posición: {error_msg}")
         response_json = response.json()
         deal_ref = response_json.get("dealReference")
-        # logger.info(f"Posición cerrada exitosamente para dealId: {deal_id}")  # Comentado
         return deal_ref
     except Exception as e:
         raise Exception(f"Error al cerrar posición: {str(e)}")
@@ -472,7 +456,7 @@ def update_stop_loss(cst: str, x_security_token: str, deal_id: str, new_stop_los
 async def monitor_trailing_stop():
     """Monitorea los precios y ajusta el trailing stop en tiempo real."""
     global cst, x_security_token
-    logger.setLevel(logging.INFO)  # Cambiar a INFO para el worker para ver mensajes clave
+    logger.setLevel(logging.INFO)
     logger.info("Iniciando monitoreo de trailing stop...")
     if not cst or not x_security_token:
         cst, x_security_token = authenticate()
@@ -485,9 +469,14 @@ async def monitor_trailing_stop():
     
     while True:
         try:
+            # Sincronizar posiciones periódicamente con la API
+            sync_open_positions(cst, x_security_token)
+            logger.info(f"Posiciones abiertas sincronizadas: {len(open_positions)} posiciones")
+            
             if not open_positions:
-                open_positions = load_positions() or {}
-                logger.info(f"Posiciones abiertas recargadas: {len(open_positions)} posiciones")
+                logger.info("No hay posiciones abiertas para monitorear")
+                await asyncio.sleep(15)
+                continue
             
             for symbol in list(open_positions.keys()):
                 min_size, current_bid, current_offer, spread, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
@@ -496,7 +485,6 @@ async def monitor_trailing_stop():
                 leverage = 100.0
                 loss_amount_usd = 10.0
 
-                # Log temporal para depuración
                 logger.info(f"Monitoreando {symbol}: entry_price={pos['entry_price']}, current_bid={current_bid}, current_offer={current_offer}, stop_loss={pos['stop_loss']}")
 
                 if pos["direction"] == "BUY":
@@ -514,7 +502,7 @@ async def monitor_trailing_stop():
                 else:  # SELL
                     min_price = min(pos["entry_price"], current_offer)
                     price_change = (loss_amount_usd * leverage) / quantity
-                    trailing_stop = round(min_price + price_change, 5)
+                    trailing_stop = round(min_price - price_change, 5)  # Restar price_change para bajar el stop loss
                     logger.info(f"SELL - min_price={min_price}, price_change={price_change}, trailing_stop={trailing_stop}, current_stop_loss={pos['stop_loss']}")
                     if trailing_stop < pos["stop_loss"]:
                         update_stop_loss(cst, x_security_token, pos["dealId"], trailing_stop)
