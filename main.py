@@ -279,7 +279,7 @@ def calculate_current_profit(pos, current_bid, current_offer):
     return profit  # Retornamos profit en USD directamente
 
 def convert_profit_to_usd(profit, symbol, current_bid):
-    # Para USDMXN, el profit ya está en USD, no necesitamos conversión adicional
+    # No se necesita conversión, el profit ya está en USD
     return round(profit, 2)
 
 def get_active_trades(cst: str, x_security_token: str, symbol: str):
@@ -414,7 +414,7 @@ async def webhook(request: Request):
                             confirmation = get_deal_confirmation(cst, x_security_token, deal_ref)
                             if "profit" in confirmation and confirmation["profit"] is not None:
                                 profit_loss = float(confirmation["profit"])
-                                profit_loss_usd = convert_profit_to_usd(profit_loss, symbol, current_bid)
+                                profit_loss_usd = profit_loss  # Usar directamente el profit de la API
                             else:
                                 exit_price = float(confirmation.get("level", current_bid if pos["direction"] == "BUY" else current_offer))
                                 quantity = pos["quantity"]
@@ -423,7 +423,7 @@ async def webhook(request: Request):
                                     profit_loss = (exit_price - pos["entry_price"]) * quantity / leverage
                                 else:
                                     profit_loss = (pos["entry_price"] - exit_price) * quantity / leverage
-                                profit_loss_usd = convert_profit_to_usd(profit_loss, symbol, current_bid)
+                                profit_loss_usd = profit_loss  # Usar el valor calculado directamente
                         except Exception as e:
                             logger.error(f"Error al obtener confirmación de cierre: {e}, usando precio actual como respaldo")
                             exit_price = current_bid if pos["direction"] == "BUY" else current_offer
@@ -433,7 +433,7 @@ async def webhook(request: Request):
                                 profit_loss = (exit_price - pos["entry_price"]) * quantity / leverage
                             else:
                                 profit_loss = (pos["entry_price"] - exit_price) * quantity / leverage
-                            profit_loss_usd = convert_profit_to_usd(profit_loss, symbol, current_bid)
+                            profit_loss_usd = profit_loss  # Usar el valor calculado directamente
                         
                         profit_loss_usd = round(profit_loss_usd, 2)
                         profit_loss_message = f"+${profit_loss_usd} USD" if profit_loss_usd >= 0 else f"-${abs(profit_loss_usd)} USD"
