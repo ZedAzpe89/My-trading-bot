@@ -13,8 +13,6 @@ import logging
 from contextlib import asynccontextmanager
 
 # Configuración de logging
-# Para el worker: solo advertencias y errores, con mensajes clave específicos
-# Para el servicio web: nivel INFO para mostrar acciones clave
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
@@ -105,16 +103,14 @@ def load_positions():
     positions = download_file(POSITIONS_FILE_NAME)
     return positions if positions is not None else {}
 
-# Manejador de eventos de lifespan para reemplazar @app.on_event("startup")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global open_positions, cst, x_security_token
-    # Configurar el nivel de logging a INFO para el servicio web
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.INFO)  # Nivel INFO para el servicio web
     open_positions = load_positions()
     cst, x_security_token = authenticate()
     sync_open_positions(cst, x_security_token)
-    logger.info("🚀 Bot iniciado correctamente.")  # Mensaje clave al iniciar
+    logger.info("🚀 Bot iniciado correctamente.")
     yield
 
 app = FastAPI(lifespan=lifespan)
@@ -144,7 +140,7 @@ def get_market_details(cst: str, x_security_token: str, epic: str):
     if response.status_code != 200:
         raise Exception(f"Error al obtener detalles del mercado: {response.text}")
     details = response.json()
-    # logger.info(f"Respuesta completa de /markets/{epic}: {json.dumps(details, indent=2)}")  # Asegurado que esté comentado
+    # logger.info(f"Respuesta completa de /markets/{epic}: {json.dumps(details, indent=2)}")  # Comentado
     min_size = details["dealingRules"]["minDealSize"]["value"]
     current_bid = details["snapshot"]["bid"]
     current_offer = details["snapshot"]["offer"]
@@ -476,54 +472,63 @@ def update_stop_loss(cst: str, x_security_token: str, deal_id: str, new_stop_los
 async def monitor_trailing_stop():
     """Monitorea los precios y ajusta el trailing stop en tiempo real."""
     global cst, x_security_token
-    # Configurar el nivel de logging a WARNING para el worker
-    logger.setLevel(logging.WARNING)
-    logger.info("Iniciando monitoreo de trailing stop...")  # Mensaje clave al iniciar
+    logger.setLevel(logging.INFO)  # Cambiar a INFO para el worker para ver mensajes clave
+    logger.info("Iniciando monitoreo de trailing stop...")
     if not cst or not x_security_token:
         cst, x_security_token = authenticate()
     
-    # Inicializar open_positions al inicio del worker
     global open_positions
     open_positions = load_positions()
     if open_positions is None:
         open_positions = {}
+    logger.info(f"Posiciones abiertas cargadas: {len(open_positions)} posiciones")
     
     while True:
         try:
             if not open_positions:
                 open_positions = load_positions() or {}
-            for symbol in list(open_positions.keys()):  # Iterar sobre una copia de las claves
+                logger.info(f"Posiciones abiertas recargadas: {len(open_positions)} posiciones")
+            
+            for symbol in list(open_positions.keys()):
                 min_size, current_bid, current_offer, spread, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
                 pos = open_positions[symbol]
                 quantity = pos["quantity"]
                 leverage = 100.0
                 loss_amount_usd = 10.0
 
+                # Log temporal para depuración
+                logger.info(f"Monitoreando {symbol}: entry_price={pos['entry_price']}, current_bid={current_bid}, current_offer={current_offer}, stop_loss={pos['stop_loss']}")
+
                 if pos["direction"] == "BUY":
                     max_price = max(pos["entry_price"], current_bid)
                     price_change = (loss_amount_usd * leverage) / quantity
                     trailing_stop = round(max_price - price_change, 5)
+                    logger.info(f"BUY - max_price={max_price}, price_change={price_change}, trailing_stop={trailing_stop}, current_stop_loss={pos['stop_loss']}")
                     if trailing_stop > pos["stop_loss"]:
                         update_stop_loss(cst, x_security_token, pos["dealId"], trailing_stop)
                         pos["stop_loss"] = trailing_stop
-                        logger.info(f"Trailing stop actualizado para {symbol} (BUY): {trailing_stop}")  # Mensaje clave
+                        logger.info(f"Trailing stop actualizado para {symbol} (BUY): {trailing_stop}")
                         send_telegram_message(f"🔄 Trailing stop actualizado para {symbol} (BUY): {trailing_stop}")
+                    else:
+                        logger.info(f"No se actualizó trailing stop para {symbol} (BUY): trailing_stop={trailing_stop} <= stop_loss={pos['stop_loss']}")
                 else:  # SELL
                     min_price = min(pos["entry_price"], current_offer)
                     price_change = (loss_amount_usd * leverage) / quantity
                     trailing_stop = round(min_price + price_change, 5)
+                    logger.info(f"SELL - min_price={min_price}, price_change={price_change}, trailing_stop={trailing_stop}, current_stop_loss={pos['stop_loss']}")
                     if trailing_stop < pos["stop_loss"]:
                         update_stop_loss(cst, x_security_token, pos["dealId"], trailing_stop)
                         pos["stop_loss"] = trailing_stop
-                        logger.info(f"Trailing stop actualizado para {symbol} (SELL): {trailing_stop}")  # Mensaje clave
+                        logger.info(f"Trailing stop actualizado para {symbol} (SELL): {trailing_stop}")
                         send_telegram_message(f"🔄 Trailing stop actualizado para {symbol} (SELL): {trailing_stop}")
+                    else:
+                        logger.info(f"No se actualizó trailing stop para {symbol} (SELL): trailing_stop={trailing_stop} >= stop_loss={pos['stop_loss']}")
                 save_positions(open_positions)
-            await asyncio.sleep(15)  # Monitoreo cada 15 segundos
+            await asyncio.sleep(15)
         except Exception as e:
             logger.error(f"Error en monitor_trailing_stop: {e}")
             send_telegram_message(f"❌ Error en monitoreo de trailing stop: {str(e)}")
-            await asyncio.sleep(60)  # Esperar más tiempo en caso de error
+            await asyncio.sleep(60)
 
 if __name__ == "__main__":
-    # Punto de entrada para el worker
     asyncio.run(monitor_trailing_stop())
