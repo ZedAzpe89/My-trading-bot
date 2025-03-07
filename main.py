@@ -128,7 +128,6 @@ def get_market_details(cst: str, x_security_token: str, epic: str):
     min_stop_distance_raw = details["dealingRules"]["minStopOrProfitDistance"]["value"] if "minStopOrProfitDistance" in details["dealingRules"] else 10.0
     min_stop_distance_unit = details["dealingRules"]["minStopOrProfitDistance"]["unit"] if "minStopOrProfitDistance" in details["dealingRules"] else "POINTS"
     if min_stop_distance_unit == "POINTS":
-        # Todos los pares (USDCAD, USDMXN, EURUSD) usan 5 decimales
         min_stop_distance = min_stop_distance_raw * 0.00001  # Convertir puntos a precio (5 decimales)
     else:  # PERCENTAGE
         min_stop_distance = current_bid * (min_stop_distance_raw / 100)
@@ -276,14 +275,11 @@ def calculate_current_profit(pos, current_bid, current_offer):
         profit = (current_bid - entry_price) * quantity / leverage
     else:
         profit = (entry_price - current_offer) * quantity / leverage
-    logger.info(f"Cálculo de profit para {pos['direction']} {pos['entry_price']} -> {current_bid if pos['direction'] == 'BUY' else current_offer}: profit={profit}, quantity={quantity}, leverage={leverage}")
-    return profit
+    logger.info(f"Cálculo de profit para {pos['direction']} {entry_price} -> {current_bid if pos['direction'] == 'BUY' else current_offer}: profit={profit} USD (antes de ajuste), quantity={quantity}, leverage={leverage}")
+    return profit  # Retornamos profit en USD directamente
 
 def convert_profit_to_usd(profit, symbol, current_bid):
-    if symbol == "USDMXN" and isinstance(profit, (int, float)):
-        profit_usd = profit / current_bid
-        logger.info(f"Conversión de profit para {symbol}: profit={profit} MXN, current_bid={current_bid}, profit_usd={profit_usd}")
-        return round(profit_usd, 2)
+    # Para USDMXN, el profit ya está en USD, no necesitamos conversión adicional
     return round(profit, 2)
 
 def get_active_trades(cst: str, x_security_token: str, symbol: str):
@@ -526,6 +522,14 @@ async def monitor_trailing_stop():
                 pos = open_positions[symbol]
                 quantity = pos["quantity"]
                 leverage = 100.0
+                upl = pos["upl"]  # Usar el valor de upl de la sincronización
+
+                # Calcular profit manualmente para depuración
+                calculated_profit = calculate_current_profit(pos, current_bid, current_offer)
+                logger.info(f"Comparación para {symbol}: upl={upl} USD (de API), calculated_profit={calculated_profit} USD (manual)")
+
+                # Usar upl como profit_usd
+                profit_usd = upl
 
                 # Todos los pares (USDCAD, USDMXN, EURUSD) usan 5 decimales
                 pip_value = 0.00001
@@ -540,13 +544,7 @@ async def monitor_trailing_stop():
                 current_bid = round(current_bid, decimal_places)
                 current_offer = round(current_offer, decimal_places)
 
-                profit = calculate_current_profit(pos, current_bid, current_offer)
-                profit_usd = convert_profit_to_usd(profit, symbol, current_bid)
-
-                # Nivel de stop loss para 0 USD de pérdida (entry_price)
-                stop_loss_for_0_usd = pos["entry_price"]
-
-                logger.info(f"Monitoreando {symbol}: direction={pos['direction']}, entry_price={pos['entry_price']}, current_bid={current_bid}, current_offer={current_offer}, stop_loss={pos['stop_loss']}, profit_usd={profit_usd}, quantity={quantity}, leverage={leverage}, min_stop_distance={min_stop_distance}, stop_loss_for_0_usd={stop_loss_for_0_usd}")
+                logger.info(f"Monitoreando {symbol}: direction={pos['direction']}, entry_price={pos['entry_price']}, current_bid={current_bid}, current_offer={current_offer}, stop_loss={pos['stop_loss']}, profit_usd={profit_usd}, quantity={quantity}, leverage={leverage}, min_stop_distance={min_stop_distance}, stop_loss_for_0_usd={pos['entry_price']}")
 
                 if profit_usd >= 3.0:
                     if pos["direction"] == "BUY":
@@ -556,7 +554,7 @@ async def monitor_trailing_stop():
                         stop_loss_for_secured_profit = pos["entry_price"] + (secured_profit_usd * leverage / quantity)
                         stop_loss_for_secured_profit = round(stop_loss_for_secured_profit, decimal_places)
                         # Usar stop_loss_for_0_usd como mínimo
-                        new_stop_loss = max(pos["stop_loss"], stop_loss_for_0_usd)
+                        new_stop_loss = max(pos["stop_loss"], pos["entry_price"])
                         # Si la ganancia asegurada es mayor que 0, ajustar el stop loss
                         if secured_profit_usd > 0:
                             new_stop_loss = max(new_stop_loss, stop_loss_for_secured_profit)
@@ -592,7 +590,7 @@ async def monitor_trailing_stop():
                         secured_profit_usd = max(0, profit_usd - 3.0)
                         stop_loss_for_secured_profit = pos["entry_price"] - (secured_profit_usd * leverage / quantity)
                         stop_loss_for_secured_profit = round(stop_loss_for_secured_profit, decimal_places)
-                        new_stop_loss = min(pos["stop_loss"], stop_loss_for_0_usd)
+                        new_stop_loss = min(pos["stop_loss"], pos["entry_price"])
                         if secured_profit_usd > 0:
                             new_stop_loss = min(new_stop_loss, stop_loss_for_secured_profit)
                         min_allowed_stop_loss = current_offer + min_stop_distance
