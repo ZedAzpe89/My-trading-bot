@@ -23,9 +23,13 @@ API_KEY = os.getenv("API_KEY")
 CUSTOM_PASSWORD = os.getenv("CUSTOM_PASSWORD")
 ACCOUNT_ID = os.getenv("ACCOUNT_ID")
 
-# Configuración de Telegram
-TELEGRAM_TOKEN = "7247126230:AAFBj8M6cca3NHcN6rUr0wDNyTZtu8dq-LQ"  # Reemplaza con el token de tu bot
-TELEGRAM_CHAT_ID = "-4757476521"       # Reemplaza con el chat ID de tu grupo
+# Configuración de Telegram desde variables de entorno
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+# Validar que las variables de Telegram estén definidas
+if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+    raise ValueError("Las variables de entorno TELEGRAM_TOKEN y TELEGRAM_CHAT_ID deben estar definidas en Render.")
 
 # Variables globales
 open_positions = {}
@@ -109,7 +113,7 @@ async def lifespan(app: FastAPI):
     logger.setLevel(logging.INFO)  # Nivel INFO para el servicio web
     open_positions = load_positions()
     cst, x_security_token = authenticate()
-    sync_open_positions(cst, x_security_token)
+    cst, x_security_token = sync_open_positions(cst, x_security_token)
     logger.info("🚀 Bot iniciado correctamente.")
     yield
     # Limpieza al cerrar (opcional)
@@ -192,12 +196,12 @@ def sync_open_positions(cst: str, x_security_token: str):
         if response.status_code != 200:
             if "errorCode" in response.json() and "invalid.session.token" in response.json()["errorCode"]:
                 logger.warning("Token de sesión inválido detectado, intentando reautenticación...")
-                global cst, x_security_token
-                cst, x_security_token = authenticate()
-                headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
+                new_cst, new_x_security_token = authenticate()
+                headers = {"X-CAP-API-KEY": API_KEY, "CST": new_cst, "X-SECURITY-TOKEN": new_x_security_token}
                 response = requests.get(f"{CAPITAL_API_URL}/positions", headers=headers)
                 if response.status_code != 200:
                     raise Exception(f"Error al sincronizar posiciones tras reautenticación: {response.text}")
+                cst, x_security_token = new_cst, new_x_security_token
             else:
                 raise Exception(f"Error al sincronizar posiciones: {response.text}")
         positions = response.json().get("positions", [])
@@ -227,6 +231,7 @@ def sync_open_positions(cst: str, x_security_token: str):
         
         open_positions = synced_positions
         save_positions(open_positions)
+        return cst, x_security_token
     except Exception as e:
         logger.error(f"Error en sync_open_positions: {e}")
         raise
@@ -285,8 +290,8 @@ def convert_profit_to_usd(profit, symbol, current_bid):
     return round(profit, 2)  # Asume USD por defecto
 
 @app.post("/webhook")
-async def webhook(request: Request, cst: str = None, x_security_token: str = None):
-    global open_positions
+async def webhook(request: Request):
+    global open_positions, cst, x_security_token
     if cst is None or x_security_token is None:
         cst, x_security_token = authenticate()
     
@@ -301,7 +306,7 @@ async def webhook(request: Request, cst: str = None, x_security_token: str = Non
             save_signal(last_signal_15m)
             return {"message": f"Última señal de 15m registrada para {symbol}: {action}"}
         
-        sync_open_positions(cst, x_security_token)
+        cst, x_security_token = sync_open_positions(cst, x_security_token)
         
         min_size, current_bid, current_offer, spread, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
         adjusted_quantity = max(quantity, min_size)
@@ -491,7 +496,7 @@ async def monitor_trailing_stop():
     while True:
         try:
             # Sincronizar posiciones periódicamente con la API
-            sync_open_positions(cst, x_security_token)
+            cst, x_security_token = sync_open_positions(cst, x_security_token)
             logger.info(f"Posiciones abiertas sincronizadas: {len(open_positions)} posiciones")
             
             if not open_positions:
