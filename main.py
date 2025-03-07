@@ -13,7 +13,7 @@ import logging
 from contextlib import asynccontextmanager
 
 # Configuración de logging
-logging.basicConfig(level=logging.WARNING)
+logging.basicConfig(level=logging.INFO)  # Cambiado a INFO para más detalles
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
@@ -220,6 +220,7 @@ def sync_open_positions(cst: str, x_security_token: str):
                 "dealId": pos["position"]["dealId"],
                 "quantity": float(pos["position"]["size"])
             }
+            logger.info(f"Sincronizando {epic}: quantity={synced_positions[epic]['quantity']} desde API")
         
         closed_positions = {k: v for k, v in open_positions.items() if k not in synced_positions}
         for symbol, pos in closed_positions.items():
@@ -281,6 +282,7 @@ def calculate_current_profit(pos, current_bid, current_offer):
         profit = (current_bid - entry_price) * quantity / leverage
     else:
         profit = (entry_price - current_offer) * quantity / leverage
+    logger.info(f"Cálculo de profit para {pos['direction']} {pos['entry_price']} -> {current_bid if pos['direction'] == 'BUY' else current_offer}: profit={profit}, quantity={quantity}, leverage={leverage}")
     return round(profit, 2)
 
 def convert_profit_to_usd(profit, symbol, current_bid):
@@ -507,13 +509,12 @@ async def monitor_trailing_stop():
             for symbol in list(open_positions.keys()):
                 min_size, current_bid, current_offer, spread, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
                 pos = open_positions[symbol]
-                quantity = pos["quantity"]  # Usar el quantity real de la posición
+                quantity = pos["quantity"]  # Usar el quantity sincronizado
                 leverage = 100.0  # Placeholder; idealmente obtener de la API si disponible
 
                 # Calcular la ganancia actual
-                profit_usd = calculate_current_profit(pos, current_bid, current_offer)
-                if symbol == "USDMXN":
-                    profit_usd = convert_profit_to_usd(profit_usd, symbol, current_bid)
+                profit = calculate_current_profit(pos, current_bid, current_offer)
+                profit_usd = convert_profit_to_usd(profit, symbol, current_bid)
 
                 logger.info(f"Monitoreando {symbol}: direction={pos['direction']}, entry_price={pos['entry_price']}, current_bid={current_bid}, current_offer={current_offer}, stop_loss={pos['stop_loss']}, profit_usd={profit_usd}, quantity={quantity}, leverage={leverage}")
 
