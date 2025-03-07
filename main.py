@@ -112,6 +112,8 @@ async def lifespan(app: FastAPI):
     sync_open_positions(cst, x_security_token)
     logger.info("🚀 Bot iniciado correctamente.")
     yield
+    # Limpieza al cerrar (opcional)
+    logger.info("Cerrando aplicación...")
 
 app = FastAPI(lifespan=lifespan)
 
@@ -124,7 +126,6 @@ class Signal(BaseModel):
     loss_amount_usd: float = 10.0
 
 def authenticate():
-    global cst, x_security_token
     headers = {"X-CAP-API-KEY": API_KEY, "Content-Type": "application/json"}
     payload = {"identifier": ACCOUNT_ID, "password": CUSTOM_PASSWORD}
     response = requests.post(f"{CAPITAL_API_URL}/session", headers=headers, json=payload)
@@ -284,7 +285,11 @@ def convert_profit_to_usd(profit, symbol, current_bid):
     return round(profit, 2)  # Asume USD por defecto
 
 @app.post("/webhook")
-async def webhook(request: Request):
+async def webhook(request: Request, cst: str = None, x_security_token: str = None):
+    global open_positions
+    if cst is None or x_security_token is None:
+        cst, x_security_token = authenticate()
+    
     data = await request.json()
     try:
         signal = Signal(**data)
@@ -295,10 +300,6 @@ async def webhook(request: Request):
             last_signal_15m[symbol] = action
             save_signal(last_signal_15m)
             return {"message": f"Última señal de 15m registrada para {symbol}: {action}"}
-        
-        global cst, x_security_token
-        if not cst or not x_security_token:
-            cst, x_security_token = authenticate()
         
         sync_open_positions(cst, x_security_token)
         
@@ -477,13 +478,11 @@ def update_stop_loss(cst: str, x_security_token: str, deal_id: str, new_stop_los
 
 async def monitor_trailing_stop():
     """Monitorea los precios y ajusta el stop loss cuando la ganancia es >= 3 USD."""
-    global cst, x_security_token
+    global open_positions
+    cst, x_security_token = authenticate()
     logger.setLevel(logging.INFO)
     logger.info("Iniciando monitoreo de trailing stop...")
-    if not cst or not x_security_token:
-        cst, x_security_token = authenticate()
     
-    global open_positions
     open_positions = load_positions()
     if open_positions is None:
         open_positions = {}
