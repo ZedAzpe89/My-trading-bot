@@ -47,6 +47,9 @@ POSITIONS_FILE_NAME = "open_positions.json"
 creds = service_account.Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=SCOPES)
 service = build("drive", "v3", credentials=creds)
 
+# Símbolos que operas
+SYMBOLS_OPERATED = ["USDCAD", "EURUSD", "USDMXN"]
+
 # Definición de funciones auxiliares
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -358,6 +361,16 @@ async def lifespan(app: FastAPI):
     open_positions = load_positions()
     cst, x_security_token = authenticate()
     cst, x_security_token = sync_open_positions(cst, x_security_token)
+    
+    # Sincronizar estados de consolidación al iniciar
+    last_signal_15m = load_signal()
+    # Inicializar estados para los símbolos operados si no están presentes
+    for symbol in SYMBOLS_OPERATED:
+        if symbol not in last_signal_15m:
+            last_signal_15m[symbol] = "Fin Consolidación"  # Estado por defecto
+    save_signal(last_signal_15m)
+    logger.info(f"Estados de consolidación sincronizados al inicio: {last_signal_15m}")
+    
     logger.info("🚀 Bot iniciado correctamente.")
     yield
     logger.info("Cerrando aplicación...")
@@ -384,11 +397,30 @@ async def webhook(request: Request):
         action, symbol, quantity, source, timeframe, loss_amount_usd = signal.action.lower(), signal.symbol, signal.quantity, signal.source, signal.timeframe, signal.loss_amount_usd
         last_signal_15m = load_signal()
         
+        # Actualizar estado de consolidación si la señal es de 15m
         if timeframe == "15m":
-            last_signal_15m[symbol] = action
+            # Traducir la acción a un estado de consolidación
+            if "inicio" in action.lower():
+                last_signal_15m[symbol] = "Inicio Consolidación"
+            elif "fin" in action.lower():
+                last_signal_15m[symbol] = "Fin Consolidación"
             save_signal(last_signal_15m)
-            return {"message": f"Última señal de 15m registrada para {symbol}: {action}"}
+            logger.info(f"Estado de consolidación actualizado para {symbol}: {last_signal_15m[symbol]}")
+            return {"message": f"Última señal de 15m registrada para {symbol}: {last_signal_15m[symbol]}"}
         
+        # Verificar el estado de consolidación antes de operar
+        market_state = last_signal_15m.get(symbol, "Fin Consolidación")  # Por defecto, permitir operación
+        if market_state == "Inicio Consolidación":
+            rejection_message = (
+                f"⚠️ Operación rechazada para {symbol}: El mercado está en un rango de consolidación. "
+                "La dinámica actual sugiere una compresión de volatilidad, lo que indica una fase de acumulación. "
+                "Se recomienda esperar a que el precio salga del rango para confirmar una dirección clara."
+            )
+            logger.info(rejection_message)
+            send_telegram_message(rejection_message)
+            return {"message": rejection_message}
+        
+        # Si el estado es "Fin Consolidación", proceder con la operación
         cst, x_security_token = sync_open_positions(cst, x_security_token)
         
         min_size, current_bid, current_offer, spread, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
