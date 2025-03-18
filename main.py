@@ -383,7 +383,7 @@ class Signal(BaseModel):
     quantity: float = 10000.0
     source: str = "rsi"
     timeframe: str = "1m"
-    loss_amount_usd: float = 10.0
+    loss_amount_usd: float = 6.0  # Cambiado de 10.0 a 6.0
 
 @app.post("/webhook")
 async def webhook(request: Request):
