@@ -52,9 +52,9 @@ SYMBOLS_OPERATED = ["USDCAD", "EURUSD", "USDMXN"]
 
 # Diccionario de distancias de stop loss fijas para 10 dólares de pérdida
 STOP_LOSS_DISTANCES = {
+    "USDMXN": 0.02007,
     "USDCAD": 0.00143,
-    "EURUSD": 0.00100,
-    "USDMXN": 0.02007
+    "EURUSD": 0.00100
 }
 
 # Definición de funciones auxiliares
@@ -208,15 +208,7 @@ def sync_open_positions(cst: str, x_security_token: str):
                 stop_level = None
                 logger.warning(f"Advertencia: No se encontró stopLevel para posición en {epic}, usando None")
             size = float(pos["position"]["size"])
-            # Ajustar quantity para que la distancia fija dé 10 dólares
-            if epic == "USDCAD":
-                quantity = 699300.7  # Ajustado para 0.00143
-            elif epic == "EURUSD":
-                quantity = 1000000.0  # Ajustado para 0.00100
-            elif epic == "USDMXN":
-                quantity = 49801.0    # Ajustado para 0.02007
-            else:
-                quantity = size * 100000
+            quantity = size * 100000  # Usar el size real sin ajustes personalizados
             synced_positions[epic] = {
                 "direction": pos["position"]["direction"],
                 "entry_price": float(pos["position"]["level"]),
@@ -225,7 +217,7 @@ def sync_open_positions(cst: str, x_security_token: str):
                 "quantity": quantity,
                 "upl": float(pos["position"]["upl"]) if "upl" in pos["position"] else 0.0
             }
-            logger.info(f"Sincronizando {epic}: size={size}, quantity={quantity} (ajustado para 10 USD), upl={synced_positions[epic]['upl']}")
+            logger.info(f"Sincronizando {epic}: size={size}, quantity={quantity}, upl={synced_positions[epic]['upl']}")
         
         closed_positions = {k: v for k, v in open_positions.items() if k not in synced_positions}
         for symbol, pos in closed_positions.items():
@@ -243,30 +235,19 @@ def sync_open_positions(cst: str, x_security_token: str):
         raise
 
 def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity, leverage, min_stop_distance, max_stop_distance=None, symbol=None):
-    entry_price = round(entry_price, 5)  # Todos los pares usan 5 decimales
-    if min_stop_distance <= 0:
-        min_stop_distance = 0.0001
+    entry_price = round(entry_price, 5)  # Redondear a 5 decimales
+    if symbol not in STOP_LOSS_DISTANCES:
+        raise ValueError(f"Símbolo {symbol} no soportado")
     
-    # Usar distancia fija de stop loss según el símbolo
-    if symbol in STOP_LOSS_DISTANCES:
-        fixed_stop_distance = STOP_LOSS_DISTANCES[symbol]
-    else:
-        fixed_stop_distance = 0.00143  # Valor por defecto (USDCAD) para otros símbolos
-    
+    fixed_stop_distance = STOP_LOSS_DISTANCES[symbol]
     logger.info(f"Cálculo de stop loss para {symbol}: entry_price={entry_price}, fixed_stop_distance={fixed_stop_distance}, direction={direction}")
     
     if direction == "BUY":
         stop_loss = entry_price - fixed_stop_distance
-        final_stop = max(stop_loss, entry_price - min_stop_distance * 2)  # Respetar mínimo
-        if max_stop_distance and final_stop < (entry_price - max_stop_distance):
-            final_stop = entry_price - max_stop_distance
     else:  # SELL
         stop_loss = entry_price + fixed_stop_distance
-        final_stop = min(stop_loss, entry_price + min_stop_distance * 2)  # Respetar máximo
-        if max_stop_distance and final_stop > (entry_price + max_stop_distance):
-            final_stop = entry_price + max_stop_distance
     
-    return round(final_stop, 5)
+    return round(stop_loss, 5)
 
 def calculate_profit_loss_from_stop_loss(pos):
     entry_price = pos["entry_price"]
@@ -420,8 +401,7 @@ async def webhook(request: Request):
         if market_state == "Inicio Consolidación":
             rejection_message = (
                 f"⚠️ Operación rechazada para {symbol}: El mercado está en un rango de consolidación. "
-                "La dinámica actual sugiere una compresión de volatilidad, lo que indica una fase de acumulación. "
-                "Se recomienda esperar a que el precio salga del rango para confirmar una dirección clara."
+                "Se recomienda esperar a que el precio salga del rango."
             )
             logger.info(rejection_message)
             send_telegram_message(rejection_message)
