@@ -136,7 +136,7 @@ def get_market_details(cst: str, x_security_token: str, epic: str):
         min_stop_distance = current_bid * (min_stop_distance_raw / 100)
     min_stop_distance = max(min_stop_distance, 0.0001)  # Asegurar un mínimo razonable
     max_stop_distance = details["dealingRules"]["maxStopOrProfitDistance"]["value"] if "maxStopOrProfitDistance" in details["dealingRules"] else None
-    logger.info(f"Detalles de mercado para {epic}: min_stop_distance={min_stop_distance}, unit={min_stop_distance_unit}")
+    logger.info(f"Detalles de mercado para {epic}: min_size={min_size}, current_bid={current_bid}, current_offer={current_offer}, spread={spread}, min_stop_distance={min_stop_distance}, max_stop_distance={max_stop_distance}")
     return min_size, current_bid, current_offer, spread, min_stop_distance, max_stop_distance
 
 def get_position_details(cst: str, x_security_token: str, epic: str):
@@ -242,21 +242,35 @@ def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity,
     if max_stop_distance:
         max_stop_value = max_stop_distance
     
-    price_change = (loss_amount_usd * leverage) / quantity
-    safety_margin = min_stop_value * 1.5
-    effective_price_change = max(price_change, safety_margin)
+    # Forzar el cálculo para una pérdida exacta de loss_amount_usd
+    target_price_change = (loss_amount_usd * leverage) / quantity
+    logger.info(f"Cálculo de stop loss para {symbol}: loss_amount_usd={loss_amount_usd}, leverage={leverage}, quantity={quantity}, target_price_change={target_price_change}")
+    # Usar min_stop_value en lugar de safety_margin * 1.5 para priorizar loss_amount_usd
+    effective_price_change = max(target_price_change, min_stop_value)
     
     if direction == "BUY":
         stop_loss = entry_price - effective_price_change
-        final_stop = max(stop_loss, entry_price - min_stop_value * 2)
+        final_stop = max(stop_loss, entry_price - min_stop_value * 2)  # Respetar mínimo
         if max_stop_distance and final_stop < (entry_price - max_stop_value):
             final_stop = entry_price - max_stop_value
     else:
         stop_loss = entry_price + effective_price_change
-        final_stop = min(stop_loss, entry_price + min_stop_value * 2)
+        final_stop = min(stop_loss, entry_price + min_stop_value * 2)  # Respetar mínimo
         if max_stop_distance and final_stop > (entry_price + max_stop_value):
             final_stop = entry_price + max_stop_value
     
+    # Verificar y ajustar para garantizar la pérdida de loss_amount_usd
+    calculated_loss = abs((final_stop - entry_price) * quantity / leverage) if direction == "BUY" else abs((entry_price - final_stop) * quantity / leverage)
+    logger.info(f"Verificación: entry_price={entry_price}, final_stop={final_stop}, calculated_loss={calculated_loss}, target_loss={loss_amount_usd}")
+    if calculated_loss < loss_amount_usd and min_stop_distance > 0:
+        adjustment = (loss_amount_usd - calculated_loss) * leverage / quantity
+        if direction == "BUY":
+            final_stop = max(final_stop - adjustment, entry_price - max_stop_value if max_stop_value else float('-inf'))
+        else:
+            final_stop = min(final_stop + adjustment, entry_price + max_stop_value if max_stop_value else float('inf'))
+        final_stop = round(final_stop, 5)
+        logger.info(f"Ajuste aplicado: new_final_stop={final_stop}, adjusted_loss={(abs((final_stop - entry_price) * quantity / leverage) if direction == 'BUY' else abs((entry_price - final_stop) * quantity / leverage))}")
+
     return round(final_stop, 5)
 
 def calculate_profit_loss_from_stop_loss(pos):
@@ -383,7 +397,7 @@ class Signal(BaseModel):
     quantity: float = 10000.0
     source: str = "rsi"
     timeframe: str = "1m"
-    loss_amount_usd: float = 6.0  # Cambiado de 10.0 a 6.0
+    loss_amount_usd: float = 6.0  # Configurado para una pérdida máxima de 6 dólares
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -424,13 +438,13 @@ async def webhook(request: Request):
         cst, x_security_token = sync_open_positions(cst, x_security_token)
         
         min_size, current_bid, current_offer, spread, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
+        logger.info(f"Detalles de mercado para {symbol}: min_size={min_size}, current_bid={current_bid}, current_offer={current_offer}, spread={spread}, min_stop_distance={min_stop_distance}, max_stop_distance={max_stop_distance}")
         adjusted_quantity = max(quantity, min_size)
-        if adjusted_quantity != quantity:
-            logger.info(f"Ajustando quantity de {quantity} a {adjusted_quantity} para cumplir con el tamaño mínimo")
-        
+        logger.info(f"Ajustando quantity para {symbol}: quantity={quantity}, adjusted_quantity={adjusted_quantity}, min_size={min_size}")
         entry_price = current_bid if action == "buy" else current_offer
         entry_price = round(entry_price, 5)
         initial_stop_loss = calculate_valid_stop_loss(entry_price, action.upper(), loss_amount_usd, adjusted_quantity, 100.0, min_stop_distance, max_stop_distance, symbol)
+        logger.info(f"Stop loss inicial calculado para {symbol}: entry_price={entry_price}, initial_stop_loss={initial_stop_loss}, loss_amount_usd={loss_amount_usd}, adjusted_quantity={adjusted_quantity}")
         
         active_trades = get_active_trades(cst, x_security_token, symbol)
         if active_trades["buy"] > 0 or active_trades["sell"] > 0:
