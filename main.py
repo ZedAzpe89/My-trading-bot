@@ -242,10 +242,9 @@ def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity,
     if max_stop_distance:
         max_stop_value = max_stop_distance
     
-    # Forzar el cálculo para una pérdida exacta de loss_amount_usd
+    # Forzar el cálculo para una pérdida exacta de loss_amount_usd usando adjusted_quantity
     target_price_change = (loss_amount_usd * leverage) / quantity
     logger.info(f"Cálculo de stop loss para {symbol}: loss_amount_usd={loss_amount_usd}, leverage={leverage}, quantity={quantity}, target_price_change={target_price_change}")
-    # Usar min_stop_value en lugar de safety_margin * 1.5 para priorizar loss_amount_usd
     effective_price_change = max(target_price_change, min_stop_value)
     
     if direction == "BUY":
@@ -259,7 +258,7 @@ def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity,
         if max_stop_distance and final_stop > (entry_price + max_stop_value):
             final_stop = entry_price + max_stop_value
     
-    # Verificar y ajustar para garantizar la pérdida de loss_amount_usd
+    # Verificar y ajustar para garantizar la pérdida de loss_amount_usd con el quantity proporcionado
     calculated_loss = abs((final_stop - entry_price) * quantity / leverage) if direction == "BUY" else abs((entry_price - final_stop) * quantity / leverage)
     logger.info(f"Verificación: entry_price={entry_price}, final_stop={final_stop}, calculated_loss={calculated_loss}, target_loss={loss_amount_usd}")
     if calculated_loss < loss_amount_usd and min_stop_distance > 0:
