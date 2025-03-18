@@ -201,14 +201,7 @@ def sync_open_positions(cst: str, x_security_token: str):
                 stop_level = None
                 logger.warning(f"Advertencia: No se encontró stopLevel para posición en {epic}, usando None")
             size = float(pos["position"]["size"])
-            if epic == "USDCAD":
-                quantity = 670667.0
-            elif epic == "EURUSD":
-                quantity = 1090909.0
-            elif epic == "USDMXN":
-                quantity = 34848.0
-            else:
-                quantity = size * 100000
+            quantity = size  # Usar el size real en lugar de valores fijos
             synced_positions[epic] = {
                 "direction": pos["position"]["direction"],
                 "entry_price": float(pos["position"]["level"]),
@@ -217,7 +210,7 @@ def sync_open_positions(cst: str, x_security_token: str):
                 "quantity": quantity,
                 "upl": float(pos["position"]["upl"]) if "upl" in pos["position"] else 0.0
             }
-            logger.info(f"Sincronizando {epic}: size={size}, quantity={quantity} (ajustado), upl={synced_positions[epic]['upl']}")
+            logger.info(f"Sincronizando {epic}: size={size}, quantity={quantity} (usando size real), upl={synced_positions[epic]['upl']}")
         
         closed_positions = {k: v for k, v in open_positions.items() if k not in synced_positions}
         for symbol, pos in closed_positions.items():
