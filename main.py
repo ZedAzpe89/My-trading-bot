@@ -208,7 +208,15 @@ def sync_open_positions(cst: str, x_security_token: str):
                 stop_level = None
                 logger.warning(f"Advertencia: No se encontró stopLevel para posición en {epic}, usando None")
             size = float(pos["position"]["size"])
-            quantity = size * 100000  # Usar el size real sin ajustes personalizados
+            # Ajustar quantity para que la distancia fija (sin spread) dé 10 dólares
+            if epic == "USDCAD":
+                quantity = 699300.7  # Ajustado para 0.00143
+            elif epic == "EURUSD":
+                quantity = 1000000.0  # Ajustado para 0.00100
+            elif epic == "USDMXN":
+                quantity = 49801.0    # Ajustado para 0.02007
+            else:
+                quantity = size * 100000
             synced_positions[epic] = {
                 "direction": pos["position"]["direction"],
                 "entry_price": float(pos["position"]["level"]),
@@ -217,7 +225,7 @@ def sync_open_positions(cst: str, x_security_token: str):
                 "quantity": quantity,
                 "upl": float(pos["position"]["upl"]) if "upl" in pos["position"] else 0.0
             }
-            logger.info(f"Sincronizando {epic}: size={size}, quantity={quantity}, upl={synced_positions[epic]['upl']}")
+            logger.info(f"Sincronizando {epic}: size={size}, quantity={quantity} (ajustado para 10 USD sin spread), upl={synced_positions[epic]['upl']}")
         
         closed_positions = {k: v for k, v in open_positions.items() if k not in synced_positions}
         for symbol, pos in closed_positions.items():
@@ -234,18 +242,21 @@ def sync_open_positions(cst: str, x_security_token: str):
         logger.error(f"Error en sync_open_positions: {e}")
         raise
 
-def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity, leverage, min_stop_distance, max_stop_distance=None, symbol=None):
+def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity, leverage, min_stop_distance, max_stop_distance=None, symbol=None, spread=None):
     entry_price = round(entry_price, 5)  # Redondear a 5 decimales
     if symbol not in STOP_LOSS_DISTANCES:
         raise ValueError(f"Símbolo {symbol} no soportado")
     
     fixed_stop_distance = STOP_LOSS_DISTANCES[symbol]
-    logger.info(f"Cálculo de stop loss para {symbol}: entry_price={entry_price}, fixed_stop_distance={fixed_stop_distance}, direction={direction}")
+    # Ajustar la distancia restando el spread para que la pérdida neta sea exactamente 10 dólares
+    adjusted_stop_distance = fixed_stop_distance - spread
+    adjusted_stop_distance = max(adjusted_stop_distance, 0.00001)  # Evitar distancias negativas o demasiado pequeñas
+    logger.info(f"Cálculo de stop loss para {symbol}: entry_price={entry_price}, fixed_stop_distance={fixed_stop_distance}, spread={spread}, adjusted_stop_distance={adjusted_stop_distance}, direction={direction}")
     
     if direction == "BUY":
-        stop_loss = entry_price - fixed_stop_distance
+        stop_loss = entry_price - adjusted_stop_distance
     else:  # SELL
-        stop_loss = entry_price + fixed_stop_distance
+        stop_loss = entry_price + adjusted_stop_distance
     
     return round(stop_loss, 5)
 
@@ -416,7 +427,7 @@ async def webhook(request: Request):
         
         entry_price = current_bid if action == "buy" else current_offer
         entry_price = round(entry_price, 5)
-        initial_stop_loss = calculate_valid_stop_loss(entry_price, action.upper(), loss_amount_usd, adjusted_quantity, 100.0, min_stop_distance, max_stop_distance, symbol)
+        initial_stop_loss = calculate_valid_stop_loss(entry_price, action.upper(), loss_amount_usd, adjusted_quantity, 100.0, min_stop_distance, max_stop_distance, symbol, spread)
         logger.info(f"Initial stop loss calculado para {symbol}: entry_price={entry_price}, initial_stop_loss={initial_stop_loss}")
         
         active_trades = get_active_trades(cst, x_security_token, symbol)
