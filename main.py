@@ -50,6 +50,13 @@ service = build("drive", "v3", credentials=creds)
 # Símbolos que operas
 SYMBOLS_OPERATED = ["USDCAD", "EURUSD", "USDMXN"]
 
+# Diccionario de distancias de stop loss fijas para 10 dólares de pérdida
+STOP_LOSS_DISTANCES = {
+    "USDCAD": 0.00143,
+    "EURUSD": 0.00100,
+    "USDMXN": 0.02007
+}
+
 # Definición de funciones auxiliares
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -136,7 +143,7 @@ def get_market_details(cst: str, x_security_token: str, epic: str):
         min_stop_distance = current_bid * (min_stop_distance_raw / 100)
     min_stop_distance = max(min_stop_distance, 0.0001)  # Asegurar un mínimo razonable
     max_stop_distance = details["dealingRules"]["maxStopOrProfitDistance"]["value"] if "maxStopOrProfitDistance" in details["dealingRules"] else None
-    logger.info(f"Detalles de mercado para {epic}: min_size={min_size}, current_bid={current_bid}, current_offer={current_offer}, spread={spread}, min_stop_distance={min_stop_distance}, max_stop_distance={max_stop_distance}")
+    logger.info(f"Detalles de mercado para {epic}: min_stop_distance={min_stop_distance}, unit={min_stop_distance_unit}")
     return min_size, current_bid, current_offer, spread, min_stop_distance, max_stop_distance
 
 def get_position_details(cst: str, x_security_token: str, epic: str):
@@ -201,7 +208,6 @@ def sync_open_positions(cst: str, x_security_token: str):
                 stop_level = None
                 logger.warning(f"Advertencia: No se encontró stopLevel para posición en {epic}, usando None")
             size = float(pos["position"]["size"])
-            # Ajustar quantity manualmente como en el código funcional
             if epic == "USDCAD":
                 quantity = 670667.0
             elif epic == "EURUSD":
@@ -209,7 +215,7 @@ def sync_open_positions(cst: str, x_security_token: str):
             elif epic == "USDMXN":
                 quantity = 34848.0
             else:
-                quantity = size * 100000  # Valor por defecto para otros símbolos
+                quantity = size * 100000
             synced_positions[epic] = {
                 "direction": pos["position"]["direction"],
                 "entry_price": float(pos["position"]["level"]),
@@ -235,52 +241,30 @@ def sync_open_positions(cst: str, x_security_token: str):
         logger.error(f"Error en sync_open_positions: {e}")
         raise
 
-def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity, leverage, min_stop_distance, max_stop_distance=None, spread=0.0, symbol=None):
+def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity, leverage, min_stop_distance, max_stop_distance=None, symbol=None):
     entry_price = round(entry_price, 5)  # Todos los pares usan 5 decimales
     if min_stop_distance <= 0:
         min_stop_distance = 0.0001
-    min_stop_value = min_stop_distance
-    if max_stop_distance:
-        max_stop_value = max_stop_distance
     
-    # Ajustar effective_entry_price considerando el spread
-    effective_entry_price = entry_price + spread if direction == "BUY" else entry_price - spread
-    target_price_change = (loss_amount_usd * leverage) / quantity
-    logger.info(f"Cálculo de stop loss para {symbol}: loss_amount_usd={loss_amount_usd}, leverage={leverage}, quantity={quantity}, spread={spread}, effective_entry_price={effective_entry_price}, target_price_change={target_price_change}")
-    effective_price_change = max(target_price_change, min_stop_value)
+    # Usar distancia fija de stop loss según el símbolo
+    if symbol in STOP_LOSS_DISTANCES:
+        fixed_stop_distance = STOP_LOSS_DISTANCES[symbol]
+    else:
+        fixed_stop_distance = 0.00143  # Valor por defecto (USDCAD) para otros símbolos
+    
+    logger.info(f"Cálculo de stop loss para {symbol}: entry_price={entry_price}, fixed_stop_distance={fixed_stop_distance}, direction={direction}")
     
     if direction == "BUY":
-        stop_loss = effective_entry_price - effective_price_change
-        final_stop = stop_loss
-        if abs(final_stop - entry_price) < min_stop_value:
-            final_stop = entry_price - min_stop_value
+        stop_loss = entry_price - fixed_stop_distance
+        final_stop = max(stop_loss, entry_price - min_stop_distance * 2)  # Respetar mínimo
         if max_stop_distance and final_stop < (entry_price - max_stop_value):
             final_stop = entry_price - max_stop_value
     else:  # SELL
-        stop_loss = effective_entry_price + effective_price_change
-        final_stop = stop_loss
-        if abs(final_stop - entry_price) < min_stop_value:
-            final_stop = entry_price + min_stop_value
+        stop_loss = entry_price + fixed_stop_distance
+        final_stop = min(stop_loss, entry_price + min_stop_distance * 2)  # Respetar máximo
         if max_stop_distance and final_stop > (entry_price + max_stop_value):
             final_stop = entry_price + max_stop_value
     
-    # Verificar y ajustar para garantizar la pérdida de loss_amount_usd
-    calculated_loss = abs((final_stop - effective_entry_price) * quantity / leverage) if direction == "BUY" else abs((effective_entry_price - final_stop) * quantity / leverage)
-    logger.info(f"Verificación: effective_entry_price={effective_entry_price}, final_stop={final_stop}, calculated_loss={calculated_loss}, target_loss={loss_amount_usd}")
-    if calculated_loss < loss_amount_usd and min_stop_distance > 0:
-        adjustment = (loss_amount_usd - calculated_loss) * leverage / quantity
-        if direction == "BUY":
-            final_stop = final_stop - adjustment
-            if max_stop_distance:
-                final_stop = max(final_stop, entry_price - max_stop_value)
-        else:  # SELL
-            final_stop = final_stop + adjustment
-            if max_stop_distance:
-                final_stop = min(final_stop, entry_price + max_stop_value)
-        final_stop = round(final_stop, 5)
-        adjusted_loss = abs((final_stop - effective_entry_price) * quantity / leverage) if direction == "BUY" else abs((effective_entry_price - final_stop) * quantity / leverage)
-        logger.info(f"Ajuste aplicado: new_final_stop={final_stop}, adjusted_loss={adjusted_loss}")
-
     return round(final_stop, 5)
 
 def calculate_profit_loss_from_stop_loss(pos):
@@ -306,7 +290,6 @@ def calculate_current_profit(pos, current_bid, current_offer):
     return profit
 
 def convert_profit_to_usd(profit, symbol, current_bid):
-    # No se necesita conversión, el profit ya está en USD
     return round(profit, 2)
 
 def get_active_trades(cst: str, x_security_token: str, symbol: str):
@@ -407,7 +390,7 @@ class Signal(BaseModel):
     quantity: float = 10000.0
     source: str = "rsi"
     timeframe: str = "1m"
-    loss_amount_usd: float = 6.0  # Configurado para una pérdida máxima de 6 dólares
+    loss_amount_usd: float = 10.0  # Actualizado a 10 dólares
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -423,7 +406,6 @@ async def webhook(request: Request):
         
         # Actualizar estado de consolidación si la señal es de 15m
         if timeframe == "15m":
-            # Traducir la acción a un estado de consolidación
             if "inicio" in action.lower():
                 last_signal_15m[symbol] = "Inicio Consolidación"
             elif "fin" in action.lower():
@@ -433,7 +415,7 @@ async def webhook(request: Request):
             return {"message": f"Última señal de 15m registrada para {symbol}: {last_signal_15m[symbol]}"}
         
         # Verificar el estado de consolidación antes de operar
-        market_state = last_signal_15m.get(symbol, "Fin Consolidación")  # Por defecto, permitir operación
+        market_state = last_signal_15m.get(symbol, "Fin Consolidación")
         if market_state == "Inicio Consolidación":
             rejection_message = (
                 f"⚠️ Operación rechazada para {symbol}: El mercado está en un rango de consolidación. "
@@ -444,17 +426,16 @@ async def webhook(request: Request):
             send_telegram_message(rejection_message)
             return {"message": rejection_message}
         
-        # Si el estado es "Fin Consolidación", proceder con la operación
         cst, x_security_token = sync_open_positions(cst, x_security_token)
         
         min_size, current_bid, current_offer, spread, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
-        logger.info(f"Detalles de mercado para {symbol}: min_size={min_size}, current_bid={current_bid}, current_offer={current_offer}, spread={spread}, min_stop_distance={min_stop_distance}, max_stop_distance={max_stop_distance}")
         adjusted_quantity = max(quantity, min_size)
-        logger.info(f"Ajustando quantity para {symbol}: quantity={quantity}, adjusted_quantity={adjusted_quantity}, min_size={min_size}")
+        if adjusted_quantity != quantity:
+            logger.info(f"Ajustando quantity de {quantity} a {adjusted_quantity} para cumplir con el tamaño mínimo")
+        
         entry_price = current_bid if action == "buy" else current_offer
         entry_price = round(entry_price, 5)
-        initial_stop_loss = calculate_valid_stop_loss(entry_price, action.upper(), loss_amount_usd, adjusted_quantity, 100.0, min_stop_distance, max_stop_distance, spread, symbol)
-        logger.info(f"Stop loss inicial calculado para {symbol}: entry_price={entry_price}, initial_stop_loss={initial_stop_loss}, loss_amount_usd={loss_amount_usd}, adjusted_quantity={adjusted_quantity}")
+        initial_stop_loss = calculate_valid_stop_loss(entry_price, action.upper(), loss_amount_usd, adjusted_quantity, 100.0, min_stop_distance, max_stop_distance, symbol)
         
         active_trades = get_active_trades(cst, x_security_token, symbol)
         if active_trades["buy"] > 0 or active_trades["sell"] > 0:
@@ -470,7 +451,6 @@ async def webhook(request: Request):
                             confirmation = get_deal_confirmation(cst, x_security_token, deal_ref)
                             if "profit" in confirmation and confirmation["profit"] is not None:
                                 profit_loss = float(confirmation["profit"])
-                                profit_loss_usd = profit_loss  # Usar directamente el profit de la API
                             else:
                                 exit_price = float(confirmation.get("level", current_bid if pos["direction"] == "BUY" else current_offer))
                                 quantity = pos["quantity"]
@@ -479,7 +459,6 @@ async def webhook(request: Request):
                                     profit_loss = (exit_price - pos["entry_price"]) * quantity / leverage
                                 else:
                                     profit_loss = (pos["entry_price"] - exit_price) * quantity / leverage
-                                profit_loss_usd = profit_loss  # Usar el valor calculado directamente
                         except Exception as e:
                             logger.error(f"Error al obtener confirmación de cierre: {e}, usando precio actual como respaldo")
                             exit_price = current_bid if pos["direction"] == "BUY" else current_offer
@@ -489,12 +468,11 @@ async def webhook(request: Request):
                                 profit_loss = (exit_price - pos["entry_price"]) * quantity / leverage
                             else:
                                 profit_loss = (pos["entry_price"] - exit_price) * quantity / leverage
-                            profit_loss_usd = profit_loss  # Usar el valor calculado directamente
                         
-                        profit_loss_usd = round(profit_loss_usd, 2)
-                        profit_loss_message = f"+${profit_loss_usd} USD" if profit_loss_usd >= 0 else f"-${abs(profit_loss_usd)} USD"
+                        profit_loss = round(profit_loss, 2)
+                        profit_loss_message = f"+${profit_loss} USD" if profit_loss >= 0 else f"-${abs(profit_loss)} USD"
                         send_telegram_message(f"🔒 Posición cerrada para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia/pérdida: {profit_loss_message}")
-                        logger.info(f"Posición cerrada para {symbol} por señal opuesta, profit_loss: {profit_loss_usd} USD")
+                        logger.info(f"Posición cerrada para {symbol} por señal opuesta, profit_loss: {profit_loss} USD")
                     except Exception as e:
                         logger.error(f"Error al cerrar posición: {e}")
                         send_telegram_message(f"🔒 Posición cerrada para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia/pérdida no calculada debido a error: {str(e)}")
