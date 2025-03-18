@@ -208,12 +208,13 @@ def sync_open_positions(cst: str, x_security_token: str):
                 stop_level = None
                 logger.warning(f"Advertencia: No se encontró stopLevel para posición en {epic}, usando None")
             size = float(pos["position"]["size"])
+            # Ajustar quantity para que la distancia fija dé 10 dólares
             if epic == "USDCAD":
-                quantity = 670667.0
+                quantity = 699300.7  # Ajustado para 0.00143
             elif epic == "EURUSD":
-                quantity = 1090909.0
+                quantity = 1000000.0  # Ajustado para 0.00100
             elif epic == "USDMXN":
-                quantity = 34848.0
+                quantity = 49801.0    # Ajustado para 0.02007
             else:
                 quantity = size * 100000
             synced_positions[epic] = {
@@ -224,7 +225,7 @@ def sync_open_positions(cst: str, x_security_token: str):
                 "quantity": quantity,
                 "upl": float(pos["position"]["upl"]) if "upl" in pos["position"] else 0.0
             }
-            logger.info(f"Sincronizando {epic}: size={size}, quantity={quantity} (ajustado), upl={synced_positions[epic]['upl']}")
+            logger.info(f"Sincronizando {epic}: size={size}, quantity={quantity} (ajustado para 10 USD), upl={synced_positions[epic]['upl']}")
         
         closed_positions = {k: v for k, v in open_positions.items() if k not in synced_positions}
         for symbol, pos in closed_positions.items():
@@ -436,6 +437,7 @@ async def webhook(request: Request):
         entry_price = current_bid if action == "buy" else current_offer
         entry_price = round(entry_price, 5)
         initial_stop_loss = calculate_valid_stop_loss(entry_price, action.upper(), loss_amount_usd, adjusted_quantity, 100.0, min_stop_distance, max_stop_distance, symbol)
+        logger.info(f"Initial stop loss calculado para {symbol}: entry_price={entry_price}, initial_stop_loss={initial_stop_loss}")
         
         active_trades = get_active_trades(cst, x_security_token, symbol)
         if active_trades["buy"] > 0 or active_trades["sell"] > 0:
