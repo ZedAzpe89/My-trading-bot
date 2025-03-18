@@ -234,7 +234,7 @@ def sync_open_positions(cst: str, x_security_token: str):
         logger.error(f"Error en sync_open_positions: {e}")
         raise
 
-def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity, leverage, min_stop_distance, max_stop_distance=None, symbol=None):
+def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity, leverage, min_stop_distance, max_stop_distance=None, spread=0.0, symbol=None):
     entry_price = round(entry_price, 5)  # Todos los pares usan 5 decimales
     if min_stop_distance <= 0:
         min_stop_distance = 0.0001
@@ -242,25 +242,26 @@ def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity,
     if max_stop_distance:
         max_stop_value = max_stop_distance
     
-    # Forzar el cálculo para una pérdida exacta de loss_amount_usd usando adjusted_quantity
+    # Ajustar target_price_change considerando el spread para operaciones BUY
+    effective_entry_price = entry_price + spread if direction == "BUY" else entry_price - spread
     target_price_change = (loss_amount_usd * leverage) / quantity
-    logger.info(f"Cálculo de stop loss para {symbol}: loss_amount_usd={loss_amount_usd}, leverage={leverage}, quantity={quantity}, target_price_change={target_price_change}")
+    logger.info(f"Cálculo de stop loss para {symbol}: loss_amount_usd={loss_amount_usd}, leverage={leverage}, quantity={quantity}, spread={spread}, effective_entry_price={effective_entry_price}, target_price_change={target_price_change}")
     effective_price_change = max(target_price_change, min_stop_value)
     
     if direction == "BUY":
-        stop_loss = entry_price - effective_price_change
+        stop_loss = effective_entry_price - effective_price_change
         final_stop = max(stop_loss, entry_price - min_stop_value * 2)  # Respetar mínimo
         if max_stop_distance and final_stop < (entry_price - max_stop_value):
             final_stop = entry_price - max_stop_value
     else:
-        stop_loss = entry_price + effective_price_change
+        stop_loss = effective_entry_price + effective_price_change
         final_stop = min(stop_loss, entry_price + min_stop_value * 2)  # Respetar mínimo
         if max_stop_distance and final_stop > (entry_price + max_stop_value):
             final_stop = entry_price + max_stop_value
     
     # Verificar y ajustar para garantizar la pérdida de loss_amount_usd con el quantity proporcionado
-    calculated_loss = abs((final_stop - entry_price) * quantity / leverage) if direction == "BUY" else abs((entry_price - final_stop) * quantity / leverage)
-    logger.info(f"Verificación: entry_price={entry_price}, final_stop={final_stop}, calculated_loss={calculated_loss}, target_loss={loss_amount_usd}")
+    calculated_loss = abs((final_stop - effective_entry_price) * quantity / leverage) if direction == "BUY" else abs((effective_entry_price - final_stop) * quantity / leverage)
+    logger.info(f"Verificación: effective_entry_price={effective_entry_price}, final_stop={final_stop}, calculated_loss={calculated_loss}, target_loss={loss_amount_usd}")
     if calculated_loss < loss_amount_usd and min_stop_distance > 0:
         adjustment = (loss_amount_usd - calculated_loss) * leverage / quantity
         if direction == "BUY":
@@ -268,7 +269,8 @@ def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity,
         else:
             final_stop = min(final_stop + adjustment, entry_price + max_stop_value if max_stop_value else float('inf'))
         final_stop = round(final_stop, 5)
-        logger.info(f"Ajuste aplicado: new_final_stop={final_stop}, adjusted_loss={(abs((final_stop - entry_price) * quantity / leverage) if direction == 'BUY' else abs((entry_price - final_stop) * quantity / leverage))}")
+        adjusted_loss = abs((final_stop - effective_entry_price) * quantity / leverage) if direction == "BUY" else abs((effective_entry_price - final_stop) * quantity / leverage)
+        logger.info(f"Ajuste aplicado: new_final_stop={final_stop}, adjusted_loss={adjusted_loss}")
 
     return round(final_stop, 5)
 
@@ -442,7 +444,7 @@ async def webhook(request: Request):
         logger.info(f"Ajustando quantity para {symbol}: quantity={quantity}, adjusted_quantity={adjusted_quantity}, min_size={min_size}")
         entry_price = current_bid if action == "buy" else current_offer
         entry_price = round(entry_price, 5)
-        initial_stop_loss = calculate_valid_stop_loss(entry_price, action.upper(), loss_amount_usd, adjusted_quantity, 100.0, min_stop_distance, max_stop_distance, symbol)
+        initial_stop_loss = calculate_valid_stop_loss(entry_price, action.upper(), loss_amount_usd, adjusted_quantity, 100.0, min_stop_distance, max_stop_distance, spread, symbol)
         logger.info(f"Stop loss inicial calculado para {symbol}: entry_price={entry_price}, initial_stop_loss={initial_stop_loss}, loss_amount_usd={loss_amount_usd}, adjusted_quantity={adjusted_quantity}")
         
         active_trades = get_active_trades(cst, x_security_token, symbol)
