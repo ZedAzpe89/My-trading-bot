@@ -257,13 +257,13 @@ def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity,
     if direction == "BUY":
         stop_loss = entry_price - fixed_stop_distance
         final_stop = max(stop_loss, entry_price - min_stop_distance * 2)  # Respetar mínimo
-        if max_stop_distance and final_stop < (entry_price - max_stop_value):
-            final_stop = entry_price - max_stop_value
+        if max_stop_distance and final_stop < (entry_price - max_stop_distance):
+            final_stop = entry_price - max_stop_distance
     else:  # SELL
         stop_loss = entry_price + fixed_stop_distance
         final_stop = min(stop_loss, entry_price + min_stop_distance * 2)  # Respetar máximo
-        if max_stop_distance and final_stop > (entry_price + max_stop_value):
-            final_stop = entry_price + max_stop_value
+        if max_stop_distance and final_stop > (entry_price + max_stop_distance):
+            final_stop = entry_price + max_stop_distance
     
     return round(final_stop, 5)
 
