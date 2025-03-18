@@ -201,7 +201,15 @@ def sync_open_positions(cst: str, x_security_token: str):
                 stop_level = None
                 logger.warning(f"Advertencia: No se encontró stopLevel para posición en {epic}, usando None")
             size = float(pos["position"]["size"])
-            quantity = size  # Usar el size real en lugar de valores fijos
+            # Ajustar quantity manualmente como en el código funcional
+            if epic == "USDCAD":
+                quantity = 670667.0
+            elif epic == "EURUSD":
+                quantity = 1090909.0
+            elif epic == "USDMXN":
+                quantity = 34848.0
+            else:
+                quantity = size * 100000  # Valor por defecto para otros símbolos
             synced_positions[epic] = {
                 "direction": pos["position"]["direction"],
                 "entry_price": float(pos["position"]["level"]),
@@ -210,7 +218,7 @@ def sync_open_positions(cst: str, x_security_token: str):
                 "quantity": quantity,
                 "upl": float(pos["position"]["upl"]) if "upl" in pos["position"] else 0.0
             }
-            logger.info(f"Sincronizando {epic}: size={size}, quantity={quantity} (usando size real), upl={synced_positions[epic]['upl']}")
+            logger.info(f"Sincronizando {epic}: size={size}, quantity={quantity} (ajustado), upl={synced_positions[epic]['upl']}")
         
         closed_positions = {k: v for k, v in open_positions.items() if k not in synced_positions}
         for symbol, pos in closed_positions.items():
@@ -239,34 +247,34 @@ def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity,
     effective_entry_price = entry_price + spread if direction == "BUY" else entry_price - spread
     target_price_change = (loss_amount_usd * leverage) / quantity
     logger.info(f"Cálculo de stop loss para {symbol}: loss_amount_usd={loss_amount_usd}, leverage={leverage}, quantity={quantity}, spread={spread}, effective_entry_price={effective_entry_price}, target_price_change={target_price_change}")
-    effective_price_change = max(target_price_change, min_stop_value)  # Asegurar que el cambio sea al menos min_stop_value
+    effective_price_change = max(target_price_change, min_stop_value)
     
     if direction == "BUY":
         stop_loss = effective_entry_price - effective_price_change
-        final_stop = stop_loss  # No limitar con min_stop_value * 2, solo respetar min_stop_distance
+        final_stop = stop_loss
         if abs(final_stop - entry_price) < min_stop_value:
             final_stop = entry_price - min_stop_value
         if max_stop_distance and final_stop < (entry_price - max_stop_value):
             final_stop = entry_price - max_stop_value
     else:  # SELL
         stop_loss = effective_entry_price + effective_price_change
-        final_stop = stop_loss  # No limitar con min_stop_value * 2, solo respetar min_stop_distance
+        final_stop = stop_loss
         if abs(final_stop - entry_price) < min_stop_value:
             final_stop = entry_price + min_stop_value
         if max_stop_distance and final_stop > (entry_price + max_stop_value):
             final_stop = entry_price + max_stop_value
     
-    # Verificar y ajustar para garantizar la pérdida de loss_amount_usd con el quantity proporcionado
+    # Verificar y ajustar para garantizar la pérdida de loss_amount_usd
     calculated_loss = abs((final_stop - effective_entry_price) * quantity / leverage) if direction == "BUY" else abs((effective_entry_price - final_stop) * quantity / leverage)
     logger.info(f"Verificación: effective_entry_price={effective_entry_price}, final_stop={final_stop}, calculated_loss={calculated_loss}, target_loss={loss_amount_usd}")
     if calculated_loss < loss_amount_usd and min_stop_distance > 0:
         adjustment = (loss_amount_usd - calculated_loss) * leverage / quantity
         if direction == "BUY":
-            final_stop = final_stop - adjustment  # Disminuir stop_loss para BUY
+            final_stop = final_stop - adjustment
             if max_stop_distance:
                 final_stop = max(final_stop, entry_price - max_stop_value)
         else:  # SELL
-            final_stop = final_stop + adjustment  # Aumentar stop_loss para SELL
+            final_stop = final_stop + adjustment
             if max_stop_distance:
                 final_stop = min(final_stop, entry_price + max_stop_value)
         final_stop = round(final_stop, 5)
@@ -294,8 +302,8 @@ def calculate_current_profit(pos, current_bid, current_offer):
         profit = (current_bid - entry_price) * quantity / leverage
     else:
         profit = (entry_price - current_offer) * quantity / leverage
-    logger.info(f"Cálculo de profit para {pos['direction']} {entry_price} -> {current_bid if pos['direction'] == 'BUY' else current_offer}: profit={profit} USD (antes de ajuste), quantity={quantity}, leverage={leverage}")
-    return profit  # Retornamos profit en USD directamente
+    logger.info(f"Cálculo de profit para {pos['direction']} {entry_price} -> {current_bid if pos['direction'] == 'BUY' else current_offer}: profit={profit} USD, quantity={quantity}, leverage={leverage}")
+    return profit
 
 def convert_profit_to_usd(profit, symbol, current_bid):
     # No se necesita conversión, el profit ya está en USD
