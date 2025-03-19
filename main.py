@@ -54,7 +54,8 @@ SYMBOLS_OPERATED = ["USDCAD", "EURUSD", "USDMXN"]
 STOP_LOSS_DISTANCES = {
     "USDMXN": 0.02007,
     "USDCAD": 0.00143,
-    "EURUSD": 0.00100
+    "EURUSD": 0.00100,
+    "USDJPY": 0.150  # Nueva distancia para USDJPY
 }
 
 # Definición de funciones auxiliares
@@ -215,6 +216,8 @@ def sync_open_positions(cst: str, x_security_token: str):
                 quantity = 1000000.0  # Ajustado para 0.00100
             elif epic == "USDMXN":
                 quantity = 49801.0    # Ajustado para 0.02007
+            elif epic == "USDJPY":
+                quantity = 6666.67    # Ajustado para 0.150
             else:
                 quantity = size * 100000
             synced_positions[epic] = {
