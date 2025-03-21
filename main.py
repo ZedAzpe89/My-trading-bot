@@ -58,8 +58,16 @@ STOP_LOSS_DISTANCES = {
     "USDJPY": 0.150
 }
 
-# Diccionario de distancias para 3 dólares (stop loss y take profit para source="no cons")
-DISTANCES_3_USD = {
+# Diccionario de distancias de stop loss fijas para 3 dólares de pérdida (source="no cons")
+STOP_LOSS_DISTANCES_NO_CONS = {
+    "USDMXN": 0.006024,
+    "USDCAD": 0.000429,
+    "EURUSD": 0.00030,
+    "USDJPY": 0.045
+}
+
+# Diccionario para distancias de take profit (para 3 dólares de ganancia, source="no cons")
+TAKE_PROFIT_DISTANCES_NO_CONS = {
     "USDMXN": 0.006024,
     "USDCAD": 0.000429,
     "EURUSD": 0.00030,
@@ -259,14 +267,14 @@ def sync_open_positions(cst: str, x_security_token: str):
         logger.error(f"Error en sync_open_positions: {e}")
         raise
 
-def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity, leverage, min_stop_distance, max_stop_distance=None, symbol=None, spread=None, source=None):
+def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity, leverage, min_stop_distance, max_stop_distance=None, symbol=None, spread=None, source=None, current_bid=None, current_offer=None):
     entry_price = round(entry_price, 5)
     if symbol not in STOP_LOSS_DISTANCES:
         raise ValueError(f"Símbolo {symbol} no soportado")
     
     # Seleccionar la distancia fija según el source
     if source == "no cons":
-        fixed_stop_distance = DISTANCES_3_USD[symbol]
+        fixed_stop_distance = STOP_LOSS_DISTANCES_NO_CONS[symbol]
     else:  # source="volatility"
         fixed_stop_distance = STOP_LOSS_DISTANCES[symbol]
     
@@ -277,8 +285,22 @@ def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity,
     
     if direction == "BUY":
         stop_loss = entry_price - adjusted_stop_distance
+        # Verificar que el stop loss cumpla con min_stop_distance
+        min_allowed_stop_loss = current_bid - min_stop_distance
+        if stop_loss > min_allowed_stop_loss:
+            stop_loss = min_allowed_stop_loss
+            new_loss_amount = abs((stop_loss - entry_price) * quantity / leverage)
+            logger.warning(f"Stop loss ajustado para cumplir con min_stop_distance: {stop_loss}, nueva pérdida inicial: {new_loss_amount} USD")
+            send_telegram_message(f"⚠️ Stop loss ajustado para {symbol} (BUY) a {stop_loss} para cumplir con las restricciones del bróker. Pérdida inicial: -${new_loss_amount} USD")
     else:  # SELL
         stop_loss = entry_price + adjusted_stop_distance
+        # Verificar que el stop loss cumpla con min_stop_distance
+        max_allowed_stop_loss = current_offer + min_stop_distance
+        if stop_loss < max_allowed_stop_loss:
+            stop_loss = max_allowed_stop_loss
+            new_loss_amount = abs((stop_loss - entry_price) * quantity / leverage)
+            logger.warning(f"Stop loss ajustado para cumplir con min_stop_distance: {stop_loss}, nueva pérdida inicial: {new_loss_amount} USD")
+            send_telegram_message(f"⚠️ Stop loss ajustado para {symbol} (SELL) a {stop_loss} para cumplir con las restricciones del bróker. Pérdida inicial: -${new_loss_amount} USD")
     
     return round(stop_loss, 5)
 
@@ -286,10 +308,10 @@ def calculate_take_profit(entry_price, direction, profit_amount_usd, quantity, l
     if source != "no cons":
         return None  # Solo aplicamos take profit para source="no cons"
     
-    if symbol not in DISTANCES_3_USD:
+    if symbol not in TAKE_PROFIT_DISTANCES_NO_CONS:
         raise ValueError(f"Símbolo {symbol} no soportado para take profit")
     
-    take_profit_distance = DISTANCES_3_USD[symbol]
+    take_profit_distance = TAKE_PROFIT_DISTANCES_NO_CONS[symbol]
     if direction == "BUY":
         take_profit = entry_price + take_profit_distance
     else:  # SELL
@@ -464,7 +486,20 @@ async def webhook(request: Request):
         
         entry_price = current_bid if action == "buy" else current_offer
         entry_price = round(entry_price, 5)
-        initial_stop_loss = calculate_valid_stop_loss(entry_price, action.upper(), loss_amount_usd, adjusted_quantity, 100.0, min_stop_distance, max_stop_distance, symbol, spread, source)
+        initial_stop_loss = calculate_valid_stop_loss(
+            entry_price=entry_price,
+            direction=action.upper(),
+            loss_amount_usd=loss_amount_usd,
+            quantity=adjusted_quantity,
+            leverage=100.0,
+            min_stop_distance=min_stop_distance,
+            max_stop_distance=max_stop_distance,
+            symbol=symbol,
+            spread=spread,
+            source=source,
+            current_bid=current_bid,
+            current_offer=current_offer
+        )
         take_profit = calculate_take_profit(entry_price, action.upper(), 3.0, adjusted_quantity, 100.0, symbol, source)
         logger.info(f"Initial stop loss calculado para {symbol}: entry_price={entry_price}, initial_stop_loss={initial_stop_loss}, take_profit={take_profit}")
         
@@ -701,6 +736,8 @@ async def monitor_trailing_stop():
                                     else:
                                         logger.error(f"Error al actualizar stop loss: {e}")
                                         send_telegram_message(f"❌ Error al actualizar stop loss para {symbol}: {str(e)}")
+                    else:
+                        logger.info(f"No se actualiza trailing stop para {symbol}: profit_usd={profit_usd} < 13.0 USD o trailing no activo")
 
                 # Lógica para source="no cons"
                 if pos["source"] == "no cons" and pos["take_profit"]:
@@ -712,14 +749,14 @@ async def monitor_trailing_stop():
                         send_telegram_message(f"🔒 Posición cerrada por take profit para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia: {profit_loss_message}")
                         logger.info(f"Posición cerrada por take profit para {symbol}, profit_loss: {profit_loss} USD")
                         del open_positions[symbol]
-                    elif pos["direction"] == "SELL" and current_price <= pos["take_profit"]:
+                    elif pos["direction"] == "SELL" y current_price <= pos["take_profit"]:
                         deal_ref = close_position(cst, x_security_token, pos["dealId"], symbol, pos["quantity"])
                         profit_loss = 3.0  # Ganancia objetivo
                         profit_loss_message = f"+${profit_loss} USD"
                         send_telegram_message(f"🔒 Posición cerrada por take profit para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia: {profit_loss_message}")
                         logger.info(f"Posición cerrada por take profit para {symbol}, profit_loss: {profit_loss} USD")
                         del open_positions[symbol]
-
+                
                 save_positions(open_positions)
             await asyncio.sleep(15)
         except Exception as e:
