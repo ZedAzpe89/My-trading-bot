@@ -422,7 +422,7 @@ def get_position_deal_id(cst: str, x_security_token: str, epic: str, direction: 
             return position["position"]["dealId"]
     raise Exception(f"No se encontró posición activa para {epic} en dirección {direction}")
 
-def place_order(cst: str, x_security_token: str, direction: str, epic: str, size: float, stop_level: float = None, limit_level: float = None):
+def place_order(cst: str, x_security_token: str, direction: str, epic: str, size: float, stop_level: float = None, profit_level: float = None):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token, "Content-Type": "application/json"}
     payload = {
         "epic": epic,
@@ -433,8 +433,8 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
     }
     if stop_level is not None:
         payload["stopLevel"] = stop_level
-    if limit_level is not None:
-        payload["limitLevel"] = limit_level
+    if profit_level is not None:
+        payload["profitLevel"] = profit_level
     
     logger.info(f"Enviando orden para {epic}: payload={json.dumps(payload, indent=2)}")
     try:
@@ -496,7 +496,7 @@ def update_stop_loss(cst: str, x_security_token: str, deal_id: str, new_stop_los
 def update_take_profit(cst: str, x_security_token: str, deal_id: str, new_take_profit: float, symbol: str):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token, "Content-Type": "application/json"}
     new_take_profit = round(new_take_profit, 5)  # Todos los pares usan 5 decimales
-    payload = {"limitLevel": new_take_profit}
+    payload = {"profitLevel": new_take_profit}
     logger.info(f"Actualizando take profit para {symbol} (dealId: {deal_id}): payload={json.dumps(payload, indent=2)}")
     response = requests.put(f"{CAPITAL_API_URL}/positions/{deal_id}", headers=headers, json=payload)
     if response.status_code != 200:
@@ -634,10 +634,10 @@ async def webhook(request: Request):
                         try:
                             new_active_trades = get_active_trades(cst, x_security_token, symbol)
                             if new_active_trades["buy"] == 0 and new_active_trades["sell"] == 0:
-                                # Abrir la posición con stopLevel y limitLevel incluidos
+                                # Abrir la posición con stopLevel y profitLevel incluidos
                                 deal_ref = place_order(
                                     cst, x_security_token, action.upper(), symbol, adjusted_quantity,
-                                    stop_level=initial_stop_loss, limit_level=take_profit
+                                    stop_level=initial_stop_loss, profit_level=take_profit
                                 )
                                 deal_id = get_position_deal_id(cst, x_security_token, symbol, action.upper())
                                 # Verificar que el stop loss y take profit se hayan configurado correctamente
@@ -680,10 +680,10 @@ async def webhook(request: Request):
             send_telegram_message(f"⚠️ Operación rechazada para {symbol}: Ya hay una operación abierta")
             return {"message": f"Operación rechazada: Ya hay una operación abierta para {symbol}"}
         
-        # Abrir la posición con stopLevel y limitLevel incluidos
+        # Abrir la posición con stopLevel y profitLevel incluidos
         deal_ref = place_order(
             cst, x_security_token, action.upper(), symbol, adjusted_quantity,
-            stop_level=initial_stop_loss, limit_level=take_profit
+            stop_level=initial_stop_loss, profit_level=take_profit
         )
         deal_id = get_position_deal_id(cst, x_security_token, symbol, action.upper())
         # Verificar que el stop loss y take profit se hayan configurado correctamente
