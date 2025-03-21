@@ -882,7 +882,7 @@ async def monitor_trailing_stop():
                             deal_ref = close_position(cst, x_security_token, pos["dealId"], symbol, pos["quantity"])
                             profit_loss = target_profit  # Ganancia objetivo
                             profit_loss_message = f"+${profit_loss} USD"
-                            send_telegram_message(f"🔒 Posición cerrada por take profit para {symbol}:六pos['direction']} a {pos['entry_price']}. Ganancia: {profit_loss_message}")
+                            send_telegram_message(f"🔒 Posición cerrada por take profit para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia: {profit_loss_message}")
                             logger.info(f"Posición cerrada por take profit para {symbol}, profit_loss: {profit_loss} USD")
                             del open_positions[symbol]
                 
