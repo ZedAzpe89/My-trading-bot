@@ -59,16 +59,18 @@ STOP_LOSS_DISTANCES = {
 }
 
 # Diccionario de distancias de stop loss fijas para 3 dólares de pérdida (source="no cons")
+# Ajustado a 5 USD para USDMXN
 STOP_LOSS_DISTANCES_NO_CONS = {
-    "USDMXN": 0.006024,
+    "USDMXN": 0.01004,  # 5 USD: (5 * 100) / 49801.0
     "USDCAD": 0.000429,
     "EURUSD": 0.00030,
     "USDJPY": 0.045
 }
 
 # Diccionario para distancias de take profit (para 3 dólares de ganancia, source="no cons")
+# Ajustado a 5 USD para USDMXN
 TAKE_PROFIT_DISTANCES_NO_CONS = {
-    "USDMXN": 0.006024,
+    "USDMXN": 0.01004,  # 5 USD: (5 * 100) / 49801.0
     "USDCAD": 0.000429,
     "EURUSD": 0.00030,
     "USDJPY": 0.045
@@ -317,6 +319,7 @@ def calculate_take_profit(entry_price, direction, profit_amount_usd, quantity, l
     else:  # SELL
         take_profit = entry_price - take_profit_distance
     
+    logger.info(f"Take profit calculado para {symbol}: entry_price={entry_price}, direction={direction}, take_profit_distance={take_profit_distance}, take_profit={take_profit}")
     return round(take_profit, 5)
 
 def calculate_profit_loss_from_stop_loss(pos):
@@ -740,22 +743,27 @@ async def monitor_trailing_stop():
                         logger.info(f"No se actualiza trailing stop para {symbol}: profit_usd={profit_usd} < 13.0 USD o trailing no activo")
 
                 # Lógica para source="no cons"
-                if pos["source"] == "no cons" and pos["take_profit"]:
-                    current_price = current_bid if pos["direction"] == "BUY" else current_offer
-                    if pos["direction"] == "BUY" and current_price >= pos["take_profit"]:
-                        deal_ref = close_position(cst, x_security_token, pos["dealId"], symbol, pos["quantity"])
-                        profit_loss = 3.0  # Ganancia objetivo
-                        profit_loss_message = f"+${profit_loss} USD"
-                        send_telegram_message(f"🔒 Posición cerrada por take profit para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia: {profit_loss_message}")
-                        logger.info(f"Posición cerrada por take profit para {symbol}, profit_loss: {profit_loss} USD")
-                        del open_positions[symbol]
-                    elif pos["direction"] == "SELL" and current_price <= pos["take_profit"]:
-                        deal_ref = close_position(cst, x_security_token, pos["dealId"], symbol, pos["quantity"])
-                        profit_loss = 3.0  # Ganancia objetivo
-                        profit_loss_message = f"+${profit_loss} USD"
-                        send_telegram_message(f"🔒 Posición cerrada por take profit para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia: {profit_loss_message}")
-                        logger.info(f"Posición cerrada por take profit para {symbol}, profit_loss: {profit_loss} USD")
-                        del open_positions[symbol]
+                if pos["source"] == "no cons":
+                    if pos["take_profit"] is None:
+                        logger.warning(f"Take profit no definido para {symbol}, source='no cons'. Posición: {pos}")
+                    else:
+                        current_price = current_bid if pos["direction"] == "BUY" else current_offer
+                        logger.info(f"Verificando take profit para {symbol}: direction={pos['direction']}, current_price={current_price}, take_profit={pos['take_profit']}")
+                        target_profit = 5.0 if symbol == "USDMXN" else 3.0  # 5 USD para USDMXN, 3 USD para otros
+                        if pos["direction"] == "BUY" and current_price >= pos["take_profit"]:
+                            deal_ref = close_position(cst, x_security_token, pos["dealId"], symbol, pos["quantity"])
+                            profit_loss = target_profit  # Ganancia objetivo
+                            profit_loss_message = f"+${profit_loss} USD"
+                            send_telegram_message(f"🔒 Posición cerrada por take profit para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia: {profit_loss_message}")
+                            logger.info(f"Posición cerrada por take profit para {symbol}, profit_loss: {profit_loss} USD")
+                            del open_positions[symbol]
+                        elif pos["direction"] == "SELL" and current_price <= pos["take_profit"]:
+                            deal_ref = close_position(cst, x_security_token, pos["dealId"], symbol, pos["quantity"])
+                            profit_loss = target_profit  # Ganancia objetivo
+                            profit_loss_message = f"+${profit_loss} USD"
+                            send_telegram_message(f"🔒 Posición cerrada por take profit para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia: {profit_loss_message}")
+                            logger.info(f"Posición cerrada por take profit para {symbol}, profit_loss: {profit_loss} USD")
+                            del open_positions[symbol]
                 
                 save_positions(open_positions)
             await asyncio.sleep(15)
