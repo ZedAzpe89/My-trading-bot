@@ -68,12 +68,12 @@ STOP_LOSS_DISTANCES_NO_CONS = {
 }
 
 # Diccionario para distancias de take profit (para 3 dólares de ganancia, source="no cons")
-# Distancias proporcionadas para generar exactamente 3 USD de ganancia
+# Distancias proporcionadas para generar exactamente 3 USD de ganancia (sin spread)
 TAKE_PROFIT_DISTANCES_NO_CONS = {
     "USDMXN": 0.00605,  # Proporcionado para 3 USD de ganancia
     "USDCAD": 0.00043,  # Proporcionado para 3 USD de ganancia
     "EURUSD": 0.00030,  # Proporcionado para 3 USD de ganancia
-    "USDJPY": 0.055     # Proporcionado para 3 USD de ganancia
+    "USDJPY": 0.045     # Actualizado a 0.045 para 3 USD de ganancia
 }
 
 # Definición de funciones auxiliares
@@ -340,12 +340,15 @@ def calculate_take_profit(entry_price, direction, profit_amount_usd, quantity, l
     if symbol not in TAKE_PROFIT_DISTANCES_NO_CONS:
         raise ValueError(f"Símbolo {symbol} no soportado para take profit")
     
-    # Usar la distancia fija proporcionada para 3 USD de ganancia
-    # No ajustamos por spread porque la aplicación ya lo maneja al abrir la posición
-    take_profit_distance = TAKE_PROFIT_DISTANCES_NO_CONS[symbol]
+    # Usar la distancia base proporcionada para 3 USD de ganancia
+    take_profit_distance_base = TAKE_PROFIT_DISTANCES_NO_CONS[symbol]
+    
+    # Sumar el spread a la distancia base para compensar su efecto y asegurar 3 USD de ganancia neta
+    adjusted_take_profit_distance = take_profit_distance_base + spread
+    adjusted_take_profit_distance = max(adjusted_take_profit_distance, 0.00001)  # Asegurar un valor positivo
     
     if direction == "BUY":
-        take_profit = entry_price + take_profit_distance
+        take_profit = entry_price + adjusted_take_profit_distance
         # Verificar que el take profit cumpla con min_limit_distance
         min_allowed_take_profit = current_bid + min_limit_distance
         if take_profit < min_allowed_take_profit:
@@ -354,7 +357,7 @@ def calculate_take_profit(entry_price, direction, profit_amount_usd, quantity, l
             logger.warning(f"Take profit ajustado para cumplir con min_limit_distance: {take_profit}, nueva ganancia objetivo: {new_profit_amount} USD")
             send_telegram_message(f"⚠️ Take profit ajustado para {symbol} (BUY) a {take_profit} para cumplir con las restricciones del bróker. Ganancia objetivo: +${new_profit_amount} USD")
     else:  # SELL
-        take_profit = entry_price - take_profit_distance
+        take_profit = entry_price - adjusted_take_profit_distance
         # Verificar que el take profit cumpla con min_limit_distance
         max_allowed_take_profit = current_offer - min_limit_distance
         if take_profit > max_allowed_take_profit:
@@ -363,7 +366,7 @@ def calculate_take_profit(entry_price, direction, profit_amount_usd, quantity, l
             logger.warning(f"Take profit ajustado para cumplir con min_limit_distance: {take_profit}, nueva ganancia objetivo: {new_profit_amount} USD")
             send_telegram_message(f"⚠️ Take profit ajustado para {symbol} (SELL) a {take_profit} para cumplir con las restricciones del bróker. Ganancia objetivo: +${new_profit_amount} USD")
     
-    logger.info(f"Take profit calculado para {symbol}: entry_price={entry_price}, direction={direction}, take_profit_distance={take_profit_distance}, take_profit={take_profit}, min_limit_distance={min_limit_distance}")
+    logger.info(f"Take profit calculado para {symbol}: entry_price={entry_price}, direction={direction}, take_profit_distance_base={take_profit_distance_base}, spread={spread}, adjusted_take_profit_distance={adjusted_take_profit_distance}, take_profit={take_profit}, min_limit_distance={min_limit_distance}")
     return round(take_profit, 5)
 
 def calculate_profit_loss_from_stop_loss(pos):
