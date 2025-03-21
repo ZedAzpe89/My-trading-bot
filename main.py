@@ -67,13 +67,13 @@ STOP_LOSS_DISTANCES_NO_CONS = {
     "USDJPY": 0.045
 }
 
-# Diccionario para distancias de take profit (para 10 dólares de ganancia, source="no cons")
-# Ajustado a 15 USD para USDMXN
+# Diccionario para distancias de take profit (para 3 dólares de ganancia, source="no cons")
+# Ajustado a 3 USD para todos los símbolos
 TAKE_PROFIT_DISTANCES_NO_CONS = {
-    "USDMXN": 0.03012,  # 15 USD: (15 * 100) / 49801.0
-    "USDCAD": 0.00143,  # 10 USD: (10 * 100) / 699300.7
-    "EURUSD": 0.00100,  # 10 USD: (10 * 100) / 1000000.0
-    "USDJPY": 0.150     # 10 USD: (10 * 100) / 6666.67
+    "USDMXN": 0.00602,  # 3 USD: (3 * 100) / 49801.0
+    "USDCAD": 0.000429, # 3 USD: (3 * 100) / 699300.7
+    "EURUSD": 0.00030,  # 3 USD: (3 * 100) / 1000000.0
+    "USDJPY": 0.045     # 3 USD: (3 * 100) / 6666.67
 }
 
 # Definición de funciones auxiliares
@@ -280,7 +280,7 @@ def sync_open_positions(cst: str, x_security_token: str):
                 (pos["direction"] == "BUY" and pos["entry_price"] <= pos["take_profit"]) or 
                 (pos["direction"] == "SELL" and pos["entry_price"] >= pos["take_profit"])
             ):
-                profit_loss = 15.0 if symbol == "USDMXN" else 10.0  # 15 USD para USDMXN, 10 USD para otros
+                profit_loss = 3.0  # 3 USD para todos los símbolos
                 profit_loss_message = f"+${profit_loss} USD"
                 send_telegram_message(f"🔒 Posición cerrada por take profit para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia: {profit_loss_message}")
                 logger.info(f"Posición cerrada por take profit para {symbol}, profit_loss: {profit_loss} USD")
@@ -333,16 +333,22 @@ def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity,
     
     return round(stop_loss, 5)
 
-def calculate_take_profit(entry_price, direction, profit_amount_usd, quantity, leverage, min_limit_distance, symbol, source, current_bid, current_offer):
+def calculate_take_profit(entry_price, direction, profit_amount_usd, quantity, leverage, min_limit_distance, symbol, source, current_bid, current_offer, spread):
     if source != "no cons":
         return None  # Solo aplicamos take profit para source="no cons"
     
     if symbol not in TAKE_PROFIT_DISTANCES_NO_CONS:
         raise ValueError(f"Símbolo {symbol} no soportado para take profit")
     
-    take_profit_distance = TAKE_PROFIT_DISTANCES_NO_CONS[symbol]
+    # Usar la distancia fija para 3 USD de ganancia
+    fixed_take_profit_distance = TAKE_PROFIT_DISTANCES_NO_CONS[symbol]
+    
+    # Ajustar la distancia restando el spread para que la ganancia neta sea exacta
+    adjusted_take_profit_distance = fixed_take_profit_distance - spread
+    adjusted_take_profit_distance = max(adjusted_take_profit_distance, 0.00001)
+    
     if direction == "BUY":
-        take_profit = entry_price + take_profit_distance
+        take_profit = entry_price + adjusted_take_profit_distance
         # Verificar que el take profit cumpla con min_limit_distance
         min_allowed_take_profit = current_bid + min_limit_distance
         if take_profit < min_allowed_take_profit:
@@ -351,7 +357,7 @@ def calculate_take_profit(entry_price, direction, profit_amount_usd, quantity, l
             logger.warning(f"Take profit ajustado para cumplir con min_limit_distance: {take_profit}, nueva ganancia objetivo: {new_profit_amount} USD")
             send_telegram_message(f"⚠️ Take profit ajustado para {symbol} (BUY) a {take_profit} para cumplir con las restricciones del bróker. Ganancia objetivo: +${new_profit_amount} USD")
     else:  # SELL
-        take_profit = entry_price - take_profit_distance
+        take_profit = entry_price - adjusted_take_profit_distance
         # Verificar que el take profit cumpla con min_limit_distance
         max_allowed_take_profit = current_offer - min_limit_distance
         if take_profit > max_allowed_take_profit:
@@ -360,7 +366,7 @@ def calculate_take_profit(entry_price, direction, profit_amount_usd, quantity, l
             logger.warning(f"Take profit ajustado para cumplir con min_limit_distance: {take_profit}, nueva ganancia objetivo: {new_profit_amount} USD")
             send_telegram_message(f"⚠️ Take profit ajustado para {symbol} (SELL) a {take_profit} para cumplir con las restricciones del bróker. Ganancia objetivo: +${new_profit_amount} USD")
     
-    logger.info(f"Take profit calculado para {symbol}: entry_price={entry_price}, direction={direction}, take_profit_distance={take_profit_distance}, take_profit={take_profit}, min_limit_distance={min_limit_distance}")
+    logger.info(f"Take profit calculado para {symbol}: entry_price={entry_price}, direction={direction}, fixed_take_profit_distance={fixed_take_profit_distance}, spread={spread}, adjusted_take_profit_distance={adjusted_take_profit_distance}, take_profit={take_profit}, min_limit_distance={min_limit_distance}")
     return round(take_profit, 5)
 
 def calculate_profit_loss_from_stop_loss(pos):
@@ -595,14 +601,15 @@ async def webhook(request: Request):
         take_profit = calculate_take_profit(
             entry_price=entry_price,
             direction=action.upper(),
-            profit_amount_usd=10.0,  # Ajustado a 10 USD
+            profit_amount_usd=3.0,  # Ajustado a 3 USD para todos los símbolos
             quantity=adjusted_quantity,
             leverage=100.0,
             min_limit_distance=min_limit_distance,
             symbol=symbol,
             source=source,
             current_bid=current_bid,
-            current_offer=current_offer
+            current_offer=current_offer,
+            spread=spread
         )
         logger.info(f"Initial stop loss y take profit calculados para {symbol}: entry_price={entry_price}, initial_stop_loss={initial_stop_loss}, take_profit={take_profit}")
         
@@ -861,7 +868,7 @@ async def monitor_trailing_stop():
                         logger.warning(f"Take profit no definido para {symbol}, source='no cons'. Posición: {pos}")
                     else:
                         current_price = current_bid if pos["direction"] == "BUY" else current_offer
-                        target_profit = 15.0 if symbol == "USDMXN" else 10.0  # Ajustado por la nueva distancia
+                        target_profit = 3.0  # 3 USD para todos los símbolos
                         profit_usd_calculated = calculate_current_profit(pos, current_bid, current_offer)
                         logger.info(f"Verificando take profit para {symbol}: direction={pos['direction']}, current_price={current_price}, take_profit={pos['take_profit']}, profit_usd={profit_usd}, profit_usd_calculated={profit_usd_calculated}, target_profit={target_profit}")
                         if pos["direction"] == "BUY" and current_price >= pos["take_profit"]:
@@ -875,7 +882,7 @@ async def monitor_trailing_stop():
                             deal_ref = close_position(cst, x_security_token, pos["dealId"], symbol, pos["quantity"])
                             profit_loss = target_profit  # Ganancia objetivo
                             profit_loss_message = f"+${profit_loss} USD"
-                            send_telegram_message(f"🔒 Posición cerrada por take profit para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia: {profit_loss_message}")
+                            send_telegram_message(f"🔒 Posición cerrada por take profit para {symbol}:六pos['direction']} a {pos['entry_price']}. Ganancia: {profit_loss_message}")
                             logger.info(f"Posición cerrada por take profit para {symbol}, profit_loss: {profit_loss} USD")
                             del open_positions[symbol]
                 
