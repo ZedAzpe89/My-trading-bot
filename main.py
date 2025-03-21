@@ -153,17 +153,20 @@ def get_market_details(cst: str, x_security_token: str, epic: str):
     current_bid = details["snapshot"]["bid"]
     current_offer = details["snapshot"]["offer"]
     spread = current_offer - current_bid
-    # Ajustar min_stop_distance según el par de divisas
+    # Ajustar min_stop_distance y min_limit_distance según el par de divisas
     min_stop_distance_raw = details["dealingRules"]["minStopOrProfitDistance"]["value"] if "minStopOrProfitDistance" in details["dealingRules"] else 10.0
     min_stop_distance_unit = details["dealingRules"]["minStopOrProfitDistance"]["unit"] if "minStopOrProfitDistance" in details["dealingRules"] else "POINTS"
     if min_stop_distance_unit == "POINTS":
         min_stop_distance = min_stop_distance_raw * 0.00001  # Convertir puntos a precio (5 decimales)
+        min_limit_distance = min_stop_distance  # Usamos el mismo valor para take profit
     else:  # PERCENTAGE
         min_stop_distance = current_bid * (min_stop_distance_raw / 100)
+        min_limit_distance = min_stop_distance
     min_stop_distance = max(min_stop_distance, 0.0001)  # Asegurar un mínimo razonable
+    min_limit_distance = max(min_limit_distance, 0.0001)
     max_stop_distance = details["dealingRules"]["maxStopOrProfitDistance"]["value"] if "maxStopOrProfitDistance" in details["dealingRules"] else None
-    logger.info(f"Detalles de mercado para {epic}: min_stop_distance={min_stop_distance}, unit={min_stop_distance_unit}")
-    return min_size, current_bid, current_offer, spread, min_stop_distance, max_stop_distance
+    logger.info(f"Detalles de mercado para {epic}: min_stop_distance={min_stop_distance}, min_limit_distance={min_limit_distance}, unit={min_stop_distance_unit}")
+    return min_size, current_bid, current_offer, spread, min_stop_distance, min_limit_distance, max_stop_distance
 
 def get_position_details(cst: str, x_security_token: str, epic: str):
     headers = {"X-CAP-API-KEY": API_KEY, "CST": cst, "X-SECURITY-TOKEN": x_security_token}
@@ -178,6 +181,7 @@ def get_position_details(cst: str, x_security_token: str, epic: str):
                 "direction": position["position"]["direction"],
                 "entry_price": float(position["position"]["level"]),
                 "stop_loss": float(position["position"].get("stopLevel", None)) if "stopLevel" in position["position"] else None,
+                "take_profit": float(position["position"].get("limitLevel", None)) if "limitLevel" in position["position"] else None,
                 "quantity": float(position["position"]["size"])
             }
     return None
@@ -244,14 +248,14 @@ def sync_open_positions(cst: str, x_security_token: str):
                 "direction": pos["position"]["direction"],
                 "entry_price": float(pos["position"]["level"]),
                 "stop_loss": stop_level,
-                "take_profit": take_profit,  # Recuperar el take profit de la API
+                "take_profit": take_profit,
                 "dealId": pos["position"]["dealId"],
                 "quantity": quantity,
                 "upl": float(pos["position"]["upl"]) if "upl" in pos["position"] else 0.0,
                 "source": open_positions.get(epic, {}).get("source", "volatility"),
                 "spread_at_open": open_positions.get(epic, {}).get("spread_at_open", 0.0),
-                "highest_price": float(pos["position"]["level"]),  # Para trailing stop
-                "lowest_price": float(pos["position"]["level"]),   # Para trailing stop
+                "highest_price": float(pos["position"]["level"]),
+                "lowest_price": float(pos["position"]["level"]),
                 "trailing_active": open_positions.get(epic, {}).get("trailing_active", False)
             }
             logger.info(f"Sincronizando {epic}: size={size}, quantity={quantity} (ajustado), upl={synced_positions[epic]['upl']}, take_profit={synced_positions[epic]['take_profit']}")
@@ -265,7 +269,7 @@ def sync_open_positions(cst: str, x_security_token: str):
                 send_telegram_message(f"🔒 Posición cerrada por stop loss para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia/pérdida: {profit_loss_message}")
                 logger.info(f"Posición cerrada por stop loss para {symbol}, profit_loss: {profit_loss} USD")
             # Verificar si se cerró por take profit
-            elif pos["take_profit"] and (pos["direction"] == "BUY" and pos["take_profit"] <= pos["entry_price"]) or (pos["direction"] == "SELL" and pos["take_profit"] >= pos["entry_price"]):
+            elif pos["take_profit"] and (pos["direction"] == "BUY" and pos["entry_price"] <= pos["take_profit"]) or (pos["direction"] == "SELL" and pos["entry_price"] >= pos["take_profit"]):
                 profit_loss = 5.0 if symbol == "USDMXN" else 3.0  # 5 USD para USDMXN, 3 USD para otros
                 profit_loss_message = f"+${profit_loss} USD"
                 send_telegram_message(f"🔒 Posición cerrada por take profit para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia: {profit_loss_message}")
@@ -319,7 +323,7 @@ def calculate_valid_stop_loss(entry_price, direction, loss_amount_usd, quantity,
     
     return round(stop_loss, 5)
 
-def calculate_take_profit(entry_price, direction, profit_amount_usd, quantity, leverage, symbol, source):
+def calculate_take_profit(entry_price, direction, profit_amount_usd, quantity, leverage, min_limit_distance, symbol, source, current_bid, current_offer):
     if source != "no cons":
         return None  # Solo aplicamos take profit para source="no cons"
     
@@ -329,10 +333,24 @@ def calculate_take_profit(entry_price, direction, profit_amount_usd, quantity, l
     take_profit_distance = TAKE_PROFIT_DISTANCES_NO_CONS[symbol]
     if direction == "BUY":
         take_profit = entry_price + take_profit_distance
+        # Verificar que el take profit cumpla con min_limit_distance
+        min_allowed_take_profit = current_bid + min_limit_distance
+        if take_profit < min_allowed_take_profit:
+            take_profit = min_allowed_take_profit
+            new_profit_amount = (take_profit - entry_price) * quantity / leverage
+            logger.warning(f"Take profit ajustado para cumplir con min_limit_distance: {take_profit}, nueva ganancia objetivo: {new_profit_amount} USD")
+            send_telegram_message(f"⚠️ Take profit ajustado para {symbol} (BUY) a {take_profit} para cumplir con las restricciones del bróker. Ganancia objetivo: +${new_profit_amount} USD")
     else:  # SELL
         take_profit = entry_price - take_profit_distance
+        # Verificar que el take profit cumpla con min_limit_distance
+        max_allowed_take_profit = current_offer - min_limit_distance
+        if take_profit > max_allowed_take_profit:
+            take_profit = max_allowed_take_profit
+            new_profit_amount = (entry_price - take_profit) * quantity / leverage
+            logger.warning(f"Take profit ajustado para cumplir con min_limit_distance: {take_profit}, nueva ganancia objetivo: {new_profit_amount} USD")
+            send_telegram_message(f"⚠️ Take profit ajustado para {symbol} (SELL) a {take_profit} para cumplir con las restricciones del bróker. Ganancia objetivo: +${new_profit_amount} USD")
     
-    logger.info(f"Take profit calculado para {symbol}: entry_price={entry_price}, direction={direction}, take_profit_distance={take_profit_distance}, take_profit={take_profit}")
+    logger.info(f"Take profit calculado para {symbol}: entry_price={entry_price}, direction={direction}, take_profit_distance={take_profit_distance}, take_profit={take_profit}, min_limit_distance={min_limit_distance}")
     return round(take_profit, 5)
 
 def calculate_profit_loss_from_stop_loss(pos):
@@ -395,15 +413,17 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
             logger.warning(f"Advertencia: take_profit inválido ({take_profit}), omitiendo limitLevel")
         else:
             payload["limitLevel"] = take_profit
+    logger.info(f"Enviando orden para {epic}: payload={json.dumps(payload, indent=2)}")
     try:
         response = requests.post(f"{CAPITAL_API_URL}/positions", headers=headers, json=payload, timeout=10)
         if response.status_code != 200:
             error_msg = response.text
             logger.error(f"Error en place_order con stopLevel y limitLevel: {error_msg}")
             raise Exception(f"Error al ejecutar la orden: {error_msg}")
+        response_json = response.json()
+        logger.info(f"Respuesta de place_order: {json.dumps(response_json, indent=2)}")
     except Exception as e:
         raise Exception(f"Error al ejecutar la orden: {str(e)}")
-    response_json = response.json()
     deal_key = "dealReference" if "dealReference" in response_json else "dealId"
     if deal_key not in response_json:
         logger.error(f"Respuesta inesperada: {response_json}")
@@ -500,7 +520,7 @@ async def webhook(request: Request):
         
         cst, x_security_token = sync_open_positions(cst, x_security_token)
         
-        min_size, current_bid, current_offer, spread, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
+        min_size, current_bid, current_offer, spread, min_stop_distance, min_limit_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
         adjusted_quantity = max(quantity, min_size)
         if adjusted_quantity != quantity:
             logger.info(f"Ajustando quantity de {quantity} a {adjusted_quantity} para cumplir con el tamaño mínimo")
@@ -521,7 +541,18 @@ async def webhook(request: Request):
             current_bid=current_bid,
             current_offer=current_offer
         )
-        take_profit = calculate_take_profit(entry_price, action.upper(), 3.0, adjusted_quantity, 100.0, symbol, source)
+        take_profit = calculate_take_profit(
+            entry_price=entry_price,
+            direction=action.upper(),
+            profit_amount_usd=3.0,
+            quantity=adjusted_quantity,
+            leverage=100.0,
+            min_limit_distance=min_limit_distance,
+            symbol=symbol,
+            source=source,
+            current_bid=current_bid,
+            current_offer=current_offer
+        )
         logger.info(f"Initial stop loss y take profit calculados para {symbol}: entry_price={entry_price}, initial_stop_loss={initial_stop_loss}, take_profit={take_profit}")
         
         active_trades = get_active_trades(cst, x_security_token, symbol)
@@ -573,6 +604,11 @@ async def webhook(request: Request):
                             if new_active_trades["buy"] == 0 and new_active_trades["sell"] == 0:
                                 deal_ref = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, initial_stop_loss, take_profit)
                                 deal_id = get_position_deal_id(cst, x_security_token, symbol, action.upper())
+                                # Verificar que el take profit se configuró correctamente
+                                position_details = get_position_details(cst, x_security_token, symbol)
+                                if position_details and position_details["take_profit"] != take_profit:
+                                    logger.warning(f"Take profit no configurado correctamente para {symbol}: esperado={take_profit}, actual={position_details['take_profit']}")
+                                    send_telegram_message(f"⚠️ Take profit no configurado correctamente para {symbol}: esperado={take_profit}, actual={position_details['take_profit']}")
                                 logger.info(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss} y TP {take_profit}, dealId: {deal_id}")
                                 send_telegram_message(f"📈 Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss} y TP {take_profit} (dealId: {deal_id})")
                                 open_positions[symbol] = {
@@ -603,6 +639,11 @@ async def webhook(request: Request):
         
         deal_ref = place_order(cst, x_security_token, action.upper(), symbol, adjusted_quantity, initial_stop_loss, take_profit)
         deal_id = get_position_deal_id(cst, x_security_token, symbol, action.upper())
+        # Verificar que el take profit se configuró correctamente
+        position_details = get_position_details(cst, x_security_token, symbol)
+        if position_details and position_details["take_profit"] != take_profit:
+            logger.warning(f"Take profit no configurado correctamente para {symbol}: esperado={take_profit}, actual={position_details['take_profit']}")
+            send_telegram_message(f"⚠️ Take profit no configurado correctamente para {symbol}: esperado={take_profit}, actual={position_details['take_profit']}")
         logger.info(f"Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss} y TP {take_profit}, dealId: {deal_id}")
         send_telegram_message(f"📈 Orden {action.upper()} ejecutada para {symbol} a {entry_price} con SL {initial_stop_loss} y TP {take_profit} (dealId: {deal_id})")
         
@@ -649,7 +690,7 @@ async def monitor_trailing_stop():
                 continue
             
             for symbol in list(open_positions.keys()):
-                min_size, current_bid, current_offer, spread, min_stop_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
+                min_size, current_bid, current_offer, spread, min_stop_distance, min_limit_distance, max_stop_distance = get_market_details(cst, x_security_token, symbol)
                 pos = open_positions[symbol]
                 quantity = pos["quantity"]
                 leverage = 100.0
@@ -759,6 +800,29 @@ async def monitor_trailing_stop():
                                         send_telegram_message(f"❌ Error al actualizar stop loss para {symbol}: {str(e)}")
                     else:
                         logger.info(f"No se actualiza trailing stop para {symbol}: profit_usd={profit_usd} < 13.0 USD o trailing no activo")
+
+                # Lógica para source="no cons" (reintroducida temporalmente para depuración)
+                if pos["source"] == "no cons":
+                    if pos["take_profit"] is None:
+                        logger.warning(f"Take profit no definido para {symbol}, source='no cons'. Posición: {pos}")
+                    else:
+                        current_price = current_bid if pos["direction"] == "BUY" else current_offer
+                        logger.info(f"Verificando take profit para {symbol}: direction={pos['direction']}, current_price={current_price}, take_profit={pos['take_profit']}, profit_usd={profit_usd}")
+                        target_profit = 5.0 if symbol == "USDMXN" else 3.0  # 5 USD para USDMXN, 3 USD para otros
+                        if pos["direction"] == "BUY" and current_price >= pos["take_profit"]:
+                            deal_ref = close_position(cst, x_security_token, pos["dealId"], symbol, pos["quantity"])
+                            profit_loss = target_profit  # Ganancia objetivo
+                            profit_loss_message = f"+${profit_loss} USD"
+                            send_telegram_message(f"🔒 Posición cerrada por take profit para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia: {profit_loss_message}")
+                            logger.info(f"Posición cerrada por take profit para {symbol}, profit_loss: {profit_loss} USD")
+                            del open_positions[symbol]
+                        elif pos["direction"] == "SELL" and current_price <= pos["take_profit"]:
+                            deal_ref = close_position(cst, x_security_token, pos["dealId"], symbol, pos["quantity"])
+                            profit_loss = target_profit  # Ganancia objetivo
+                            profit_loss_message = f"+${profit_loss} USD"
+                            send_telegram_message(f"🔒 Posición cerrada por take profit para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia: {profit_loss_message}")
+                            logger.info(f"Posición cerrada por take profit para {symbol}, profit_loss: {profit_loss} USD")
+                            del open_positions[symbol]
                 
                 save_positions(open_positions)
             await asyncio.sleep(15)
