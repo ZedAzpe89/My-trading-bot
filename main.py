@@ -749,7 +749,7 @@ async def monitor_trailing_stop():
                         send_telegram_message(f"🔒 Posición cerrada por take profit para {symbol}: {pos['direction']} a {pos['entry_price']}. Ganancia: {profit_loss_message}")
                         logger.info(f"Posición cerrada por take profit para {symbol}, profit_loss: {profit_loss} USD")
                         del open_positions[symbol]
-                    elif pos["direction"] == "SELL" y current_price <= pos["take_profit"]:
+                    elif pos["direction"] == "SELL" and current_price <= pos["take_profit"]:
                         deal_ref = close_position(cst, x_security_token, pos["dealId"], symbol, pos["quantity"])
                         profit_loss = 3.0  # Ganancia objetivo
                         profit_loss_message = f"+${profit_loss} USD"
