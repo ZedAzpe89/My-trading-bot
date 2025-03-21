@@ -69,11 +69,12 @@ STOP_LOSS_DISTANCES_NO_CONS = {
 
 # Diccionario para distancias de take profit (para 3 dólares de ganancia, source="no cons")
 # Ajustado a 5 USD para USDMXN
+# Duplicamos las distancias temporalmente para probar
 TAKE_PROFIT_DISTANCES_NO_CONS = {
-    "USDMXN": 0.01004,  # 5 USD: (5 * 100) / 49801.0
-    "USDCAD": 0.000429,
-    "EURUSD": 0.00030,
-    "USDJPY": 0.045
+    "USDMXN": 0.02008,  # 10 USD: (10 * 100) / 49801.0
+    "USDCAD": 0.000858,
+    "EURUSD": 0.00060,
+    "USDJPY": 0.090
 }
 
 # Definición de funciones auxiliares
@@ -407,12 +408,13 @@ def place_order(cst: str, x_security_token: str, direction: str, epic: str, size
         if not isinstance(stop_loss, (int, float)) or stop_loss <= 0:
             logger.warning(f"Advertencia: stop_loss inválido ({stop_loss}), omitiendo stopLevel")
         else:
-            payload["stopLevel"] = stop_loss
+            payload["stopLevel"] = round(stop_loss, 5)
     if take_profit is not None:
         if not isinstance(take_profit, (int, float)) or take_profit <= 0:
             logger.warning(f"Advertencia: take_profit inválido ({take_profit}), omitiendo limitLevel")
         else:
-            payload["limitLevel"] = take_profit
+            # Enviar como cadena con 5 decimales
+            payload["limitLevel"] = f"{take_profit:.5f}"
     logger.info(f"Enviando orden para {epic}: payload={json.dumps(payload, indent=2)}")
     try:
         response = requests.post(f"{CAPITAL_API_URL}/positions", headers=headers, json=payload, timeout=10)
@@ -807,8 +809,9 @@ async def monitor_trailing_stop():
                         logger.warning(f"Take profit no definido para {symbol}, source='no cons'. Posición: {pos}")
                     else:
                         current_price = current_bid if pos["direction"] == "BUY" else current_offer
-                        logger.info(f"Verificando take profit para {symbol}: direction={pos['direction']}, current_price={current_price}, take_profit={pos['take_profit']}, profit_usd={profit_usd}")
-                        target_profit = 5.0 if symbol == "USDMXN" else 3.0  # 5 USD para USDMXN, 3 USD para otros
+                        target_profit = 10.0 if symbol == "USDMXN" else 6.0  # Ajustado por la nueva distancia
+                        profit_usd_calculated = calculate_current_profit(pos, current_bid, current_offer)
+                        logger.info(f"Verificando take profit para {symbol}: direction={pos['direction']}, current_price={current_price}, take_profit={pos['take_profit']}, profit_usd={profit_usd}, profit_usd_calculated={profit_usd_calculated}, target_profit={target_profit}")
                         if pos["direction"] == "BUY" and current_price >= pos["take_profit"]:
                             deal_ref = close_position(cst, x_security_token, pos["dealId"], symbol, pos["quantity"])
                             profit_loss = target_profit  # Ganancia objetivo
